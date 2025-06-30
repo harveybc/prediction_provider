@@ -1,45 +1,59 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='predictor',
+    name='prediction_provider',
     version='0.1.0',
     packages=find_packages(),
     entry_points={
         'console_scripts': [
-            'predictor=app.main:main'
+            'prediction_provider=app.main:main'
         ],
-        # Plugins para el Predictor
-        'predictor.plugins': [
-            'default_predictor=predictor_plugins.predictor_plugin_ann:Plugin',
-            'ann=predictor_plugins.predictor_plugin_ann:Plugin',
-            'n_beats=predictor_plugins.predictor_plugin_n_beats:Plugin',
-            'cnn=predictor_plugins.predictor_plugin_cnn:Plugin',
-            'lstm=predictor_plugins.predictor_plugin_lstm:Plugin',
-            'transformer=predictor_plugins.predictor_plugin_transformer:Plugin',
-            'base=predictor_plugin.predictor_plugin_base:Plugin'
-        ],
-        # Plugins para la Optimización (por defecto, basado en DEAP)
-        'optimizer.plugins': [
-            'default_optimizer=optimizer_plugins.default_optimizer:Plugin'
-        ],
-        # Plugins para el Pipeline (orquestación del flujo completo)
+        # Pipeline plugins - Orquestan el flujo de procesamiento completo
         'pipeline.plugins': [
-            'default_pipeline=pipeline_plugins.default_pipeline:PipelinePlugin',
-            'stl_pipeline=pipeline_plugins.stl_pipeline:STLPipelinePlugin'
+            'default_pipeline=pipeline_plugins.default_pipeline:Plugin'
         ],
-        # Plugins para el Preprocesamiento (incluye process_data, ventanas deslizantes y STL)
-        'preprocessor.plugins': [
-            'default_preprocessor=preprocessor_plugins.default_preprocessor:PreprocessorPlugin',
-            'stl_preprocessor=preprocessor_plugins.stl_preprocessor:PreprocessorPlugin'
+        # Data feeder plugins - Obtienen y preparan datos de entrada
+        'data_feeder.plugins': [
+            'default_data_feeder=data_feeder_plugins.default_data_feeder:Plugin',
+            'file_data_feeder=data_feeder_plugins.file_data_feeder:Plugin',
+            'api_data_feeder=data_feeder_plugins.api_data_feeder:Plugin'
+        ],
+        # Predictor plugins - Cargan modelos y generan predicciones
+        'predictor.plugins': [
+            'default_predictor=predictor_plugins.default_predictor:Plugin',
+            'keras_predictor=predictor_plugins.keras_predictor:Plugin',
+            'onnx_predictor=predictor_plugins.onnx_predictor:Plugin',
+            'remote_predictor=predictor_plugins.remote_predictor:Plugin'
+        ],
+        # API endpoints plugins - Definen endpoints RESTful individuales
+        'api_endpoints.plugins': [
+            'predict_endpoint=api_endpoints_plugins.predict_endpoint:Plugin',
+            'health_endpoint=api_endpoints_plugins.health_endpoint:Plugin',
+            'info_endpoint=api_endpoints_plugins.info_endpoint:Plugin',
+            'metrics_endpoint=api_endpoints_plugins.metrics_endpoint:Plugin'
+        ],
+        # API core plugins - Gestionan configuración central del servidor Flask
+        'api_core.plugins': [
+            'default_api_core=api_core_plugins.default_api_core:Plugin',
+            'jwt_auth_core=api_core_plugins.jwt_auth_core:Plugin',
+            'cors_enabled_core=api_core_plugins.cors_enabled_core:Plugin'
         ]
     },
     install_requires=[
-        'build'
+        'flask',
+        'pandas',
+        'numpy',
+        'scikit-learn',
+        'tensorflow',
+        'onnxruntime',
+        'requests',
+        'pyjwt',
+        'flask-cors'
     ],
     author='Harvey Bastidas',
     author_email='your.email@example.com',
     description=(
-        'A timeseries prediction system that supports dynamic loading of plugins for prediction, '
-        'optimization, pipeline orchestration, and data pre-processing.'
+        'A prediction provider system that supports dynamic loading of plugins for data feeding, '
+        'prediction models, API endpoints, pipeline orchestration, and API core functionality.'
     )
 )
