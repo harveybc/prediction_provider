@@ -1,0 +1,42 @@
+{
+    "server_host": "0.0.0.0",
+    "server_port": 5000,
+    "debug": false,
+    "database_url": "sqlite:///prediction_provider.db",
+    "auth_type": "none",
+    "cors_enabled": true,
+    "allowed_origins": ["*"],
+    
+    "pipeline_plugin": "default_pipeline",
+    "feeder_plugin": "default_feeder",
+    "predictor_plugin": "default_predictor",
+    "core_plugin": "default_core",
+    "endpoint_plugins": [
+        "predict_endpoint",
+        "health_endpoint",
+        "info_endpoint",
+        "metrics_endpoint"
+    ],
+    
+    "data_source": "file",
+    "data_file_path": "examples/data/market_data.csv",
+    "batch_size": 32,
+    "window_size": 144,
+    "time_horizon": 6,
+    "target_column": "CLOSE",
+    "feature_columns": ["OPEN", "HIGH", "LOW", "CLOSE", "VOLUME"],
+    "date_column": "DATE_TIME",
+    
+    "model_type": "keras",
+    "prediction_horizon": 6,
+    "mc_samples": 100,
+    "use_gpu": true,
+    "enable_mixed_precision": false,
+    
+    "pipeline_enabled": true,
+    "max_prediction_threads": 10,
+    "prediction_timeout": 300,
+    "cache_predictions": false,
+    "enable_logging": true,
+    "log_level": "INFO"
+}

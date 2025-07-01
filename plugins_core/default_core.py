@@ -12,7 +12,7 @@ from functools import wraps
 from datetime import datetime, timedelta
 import os
 
-class Plugin:
+class DefaultCorePlugin:
     """Default Core Plugin for Flask application setup."""
     
     plugin_params = {
@@ -202,4 +202,4 @@ class Plugin:
         return token
 
 # For backward compatibility
-PipelinePlugin = Plugin
+Plugin = DefaultCorePlugin

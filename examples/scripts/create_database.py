@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 
 # Add the parent directory to the path to import app modules
-sys.path.append(str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.models import create_database_engine, create_tables, Base
 

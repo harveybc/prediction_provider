@@ -10,28 +10,26 @@ setup(
         ],
         # Pipeline plugins - Orquestan el flujo de procesamiento completo
         'pipeline.plugins': [
-            'default_pipeline=plugins_pipeline.default_pipeline:Plugin'
+            'default_pipeline=plugins_pipeline.default_pipeline:DefaultPipelinePlugin'
         ],
         # Data feeder plugins - Obtienen y preparan datos de entrada
         'feeder.plugins': [
-            'default_feeder=plugins_feeder.api_feeder:Plugin',
-            'file_feeder=plugins_feeder.file_feeder:Plugin',
-            'api_feeder=plugins_feeder.api_feeder:Plugin'
+            'default_feeder=plugins_feeder.default_feeder:DefaultFeederPlugin'
         ],
         # Predictor plugins - Cargan modelos y generan predicciones
         'predictor.plugins': [
-            'default_predictor=plugins_predictor.default_predictor:Plugin'            
+            'default_predictor=plugins_predictor.default_predictor:DefaultPredictorPlugin'            
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [
-            'predict_endpoint=plugins_endpoints.predict_endpoint:Plugin',
-            'health_endpoint=plugins_endpoints.health_endpoint:Plugin',
-            'info_endpoint=plugins_endpoints.info_endpoint:Plugin',
-            'metrics_endpoint=plugins_endpoints.metrics_endpoint:Plugin'
+            'predict_endpoint=plugins_endpoints.predict_endpoint:PredictEndpointPlugin',
+            'health_endpoint=plugins_endpoints.health_endpoint:HealthEndpointPlugin',
+            'info_endpoint=plugins_endpoints.info_endpoint:InfoEndpointPlugin',
+            'metrics_endpoint=plugins_endpoints.metrics_endpoint:MetricsEndpointPlugin'
         ],
         # API core plugins - Gestionan configuración central del servidor Flask
         'core.plugins': [
-            'default_core=plugins_core.default_core:Plugin'
+            'default_core=plugins_core.default_core:DefaultCorePlugin'
         ]
     },
     install_requires=[
