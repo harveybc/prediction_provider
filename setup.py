@@ -24,7 +24,6 @@ setup(
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [
-            'default_endpoints=plugins_endpoints.predict_endpoint:Plugin',
             'predict_endpoint=plugins_endpoints.predict_endpoint:Plugin',
             'health_endpoint=plugins_endpoints.health_endpoint:Plugin',
             'info_endpoint=plugins_endpoints.info_endpoint:Plugin',
@@ -44,7 +43,8 @@ setup(
         'onnxruntime',
         'requests',
         'pyjwt',
-        'flask-cors'
+        'flask-cors',
+        'sqlalchemy'
     ],
     author='Harvey Bastidas',
     author_email='your.email@example.com',

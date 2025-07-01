@@ -110,16 +110,20 @@ def main():
         print(f"Failed to load or initialize Predictor Plugin: {e}")
         sys.exit(1)
 
-    # Carga del API Endpoints Plugin
-    plugin_name = config.get('endpoints_plugin', 'default_endpoints')
-    print(f"Loading Plugin ..{plugin_name}")
-    try:
-        endpoints_class, _ = load_plugin('endpoints.plugins', plugin_name)
-        endpoints_plugin = endpoints_class(config)
-        endpoints_plugin.set_params(**config)
-    except Exception as e:
-        print(f"Failed to load or initialize Endpoints Plugin: {e}")
-        sys.exit(1)
+    # Carga del API Endpoints Plugin(s) - Multiple plugins pueden ser cargados
+    endpoint_plugins = []
+    endpoint_plugin_names = config.get('endpoint_plugins', ['predict_endpoint'])  # Default to predict_endpoint
+    
+    for endpoint_plugin_name in endpoint_plugin_names:
+        print(f"Loading Endpoint Plugin ..{endpoint_plugin_name}")
+        try:
+            endpoint_class, _ = load_plugin('endpoints.plugins', endpoint_plugin_name)
+            endpoint_plugin = endpoint_class(config)
+            endpoint_plugin.set_params(**config)
+            endpoint_plugins.append(endpoint_plugin)
+        except Exception as e:
+            print(f"Failed to load or initialize Endpoint Plugin '{endpoint_plugin_name}': {e}")
+            sys.exit(1)
 
     # Carga del API Core Plugin
     plugin_name = config.get('core_plugin', 'default_core')
@@ -139,52 +143,50 @@ def main():
     config = merge_config(config, feeder_plugin.plugin_params, {}, file_config, cli_args, unknown_args_dict)
     # fusión de configuración, integrando parámetros específicos de plugin predictor
     config = merge_config(config, predictor_plugin.plugin_params, {}, file_config, cli_args, unknown_args_dict)
-    # fusión de configuración, integrando parámetros específicos de plugin endpoints
-    config = merge_config(config, endpoints_plugin.plugin_params, {}, file_config, cli_args, unknown_args_dict)
+    # fusión de configuración, integrando parámetros específicos de plugins endpoints
+    for endpoint_plugin in endpoint_plugins:
+        config = merge_config(config, endpoint_plugin.plugin_params, {}, file_config, cli_args, unknown_args_dict)
     # fusión de configuración, integrando parámetros específicos de plugin core
     config = merge_config(config, core_plugin.plugin_params, {}, file_config, cli_args, unknown_args_dict)
     
 
     # --- DECISIÓN DE EJECUCIÓN ---
-    if config.get('load_model', False):
-        print("Loading and evaluating existing model...")
-        try:
-            # Usar el predictor plugin para cargar y evaluar el modelo (método ya existente)
-            predictor_plugin.load_and_evaluate_model(config)
-        except Exception as e:
-            print(f"Model evaluation failed: {e}")
-            sys.exit(1)
-    else:
-        # Si se activa el optimizador, se ejecuta el proceso de optimización antes del pipeline
-        if config.get('use_optimizer', False):
-            print("Running hyperparameter optimization with Pipeline Plugin...")
-            try:
-                # El pipeline optimiza los parámetros (por ejemplo, invoca build_model, train, evaluate internamente)
-                optimal_params = pipeline_plugin.optimize(predictor_plugin, feeder_plugin, config)
-                # Se guardan los parámetros óptimos en un archivo JSON
-                optimizer_output_file = config.get("optimizer_output_file", "optimizer_output.json")
-                with open(optimizer_output_file, "w") as f:
-                    json.dump(optimal_params, f, indent=4)
-                print(f"Optimized parameters saved to {optimizer_output_file}.")
-                # Actualizar la configuración con los parámetros optimizados
-                config.update(optimal_params)
-            except Exception as e:
-                print(f"Hyperparameter optimization failed: {e}")
-                sys.exit(1)
-        else:
-            print("Skipping hyperparameter optimization.")
-            print("Running prediction pipeline...")
-            # El Pipeline Plugin orquesta:
-            # 1. Data feeding (obtención y preparación de datos)
-            # 2. Predicción usando el Predictor Plugin
-            # 3. Exposición de API usando endpoints y core plugins
-            pipeline_plugin.run_prediction_pipeline(
-                config,
-                predictor_plugin,
-                feeder_plugin,
-                endpoints_plugin,
-                core_plugin
-            )
+    # Iniciar el servidor Flask de Prediction Provider
+    print("Starting Prediction Provider Flask server...")
+    try:
+        # El Core Plugin inicializa la aplicación Flask
+        flask_app = core_plugin.init_app(config)
+        
+        # Los Endpoints Plugins registran todos sus endpoints en la aplicación Flask
+        for endpoint_plugin in endpoint_plugins:
+            endpoint_plugin.register(flask_app)
+        
+        # El Pipeline Plugin prepara el sistema de predicción
+        pipeline_plugin.initialize_prediction_system(
+            config,
+            predictor_plugin,
+            feeder_plugin
+        )
+        
+        # Configurar el puerto del servidor
+        server_port = config.get('server_port', 5000)
+        server_host = config.get('server_host', '0.0.0.0')
+        debug_mode = config.get('debug', False)
+        
+        print(f"Starting Flask server on {server_host}:{server_port}")
+        print(f"Debug mode: {debug_mode}")
+        
+        # Iniciar el servidor Flask
+        flask_app.run(
+            host=server_host,
+            port=server_port,
+            debug=debug_mode,
+            threaded=True
+        )
+        
+    except Exception as e:
+        print(f"Failed to start Prediction Provider server: {e}")
+        sys.exit(1)
         
     # Guardado de la configuración local y remota
     if config.get('save_config'):
