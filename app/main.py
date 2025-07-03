@@ -8,7 +8,12 @@ Entry point for the Prediction Provider application. This script orchestrates:
 """
 
 import sys
+import os
 import signal
+
+# Add the project root to the Python path to allow for absolute imports
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from app.config_handler import load_config, remote_load_config
 from app.cli import parse_args
 from app.config import DEFAULT_VALUES

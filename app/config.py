@@ -18,7 +18,7 @@ DEFAULT_VALUES = {
 
     # --- Data Feeder Configuration ---
     # Parameters for the data feeder plugin, which handles data acquisition and preprocessing.
-    "instrument": "EUR/USD",
+    "instrument": "MSFT",
     "n_batches": 1, # The number of batches to retrieve. Total records = n_batches * batch_size.
     "batch_size": 256, # The number of time steps (records) in each batch.
     "use_normalization_json": "examples/config/phase_2_normalizer_debug_out.json", # Path to the normalization config file.

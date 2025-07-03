@@ -23,8 +23,8 @@ class DefaultFeederPlugin:
     
     # Plugin parameters with default values
     plugin_params = {
-        "instrument": "EURUSD=X",
-        "correlated_instruments": ["^GSPC", "^VIX"],
+        "instrument": "MSFT",
+        "correlated_instruments": [],
         "n_batches": 1,
         "batch_size": 256,
         "window_size": 256,
@@ -79,8 +79,25 @@ class DefaultFeederPlugin:
         if df is None or df.empty:
             return pd.DataFrame()
 
-        # Add all ta indicators
-        df.ta.strategy("all")
+        # Define a custom strategy to avoid indicators with deprecated pandas functions
+        custom_strategy = ta.Strategy(
+            name="Custom Strategy",
+            description="A custom strategy to calculate required indicators",
+            ta=[
+                {"kind": "rsi"},
+                {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},
+                {"kind": "ema", "length": 20},
+                {"kind": "stoch", "k": 14, "d": 3, "smooth_k": 3},
+                {"kind": "adx", "length": 14},
+                {"kind": "atr", "length": 14},
+                {"kind": "cci", "length": 14, "c": 0.015},
+                {"kind": "willr", "length": 14},
+                {"kind": "mom", "length": 10},
+                {"kind": "roc", "length": 10},
+            ]
+        )
+        # Apply the custom strategy
+        df.ta.strategy(custom_strategy)
 
         # Bar-based features
         df['BC-BO'] = df['Close'].shift(1) - df['Open'].shift(1)
@@ -129,11 +146,6 @@ class DefaultFeederPlugin:
 
         # Calculate features
         df = self._calculate_features(df)
-
-        # High-frequency features (mocked for now, yfinance doesn't provide tick data)
-        for i in range(1, 9):
-            df[f'CLOSE_15m_tick_{i}'] = df['Close'].shift(i * 15, freq='T').ffill()
-            df[f'CLOSE_30m_tick_{i}'] = df['Close'].shift(i * 30, freq='T').ffill()
 
         df = df.dropna().reset_index(drop=False)
         df.rename(columns={'index': 'DATE_TIME'}, inplace=True)

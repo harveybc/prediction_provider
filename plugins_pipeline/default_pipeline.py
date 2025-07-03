@@ -9,7 +9,7 @@ from the feeder to the predictor and handling the results.
 import time
 import json
 from datetime import datetime
-import sqlite3
+from app.models import create_database_engine, get_session, Prediction
 
 class DefaultPipelinePlugin:
     """
@@ -41,7 +41,7 @@ class DefaultPipelinePlugin:
         self.predictor_plugin = None
         self.feeder_plugin = None
         self.running = False
-        self.db_conn = None
+        self.engine = None
         
         if config:
             self.set_params(**config)
@@ -71,9 +71,25 @@ class DefaultPipelinePlugin:
             "running": self.running,
             "predictor_loaded": self.predictor_plugin is not None,
             "feeder_loaded": self.feeder_plugin is not None,
-            "database_connected": self.db_conn is not None
+            "database_connected": self.engine is not None,
+            "last_prediction_status": self.get_last_prediction_status()
         })
         return debug_info
+
+    def get_last_prediction_status(self):
+        """
+        Retrieves the status of the most recent prediction.
+        """
+        if not self.engine:
+            return "db not connected"
+        session = get_session(self.engine)
+        try:
+            prediction = session.query(Prediction).order_by(Prediction.id.desc()).first()
+            return prediction.status if prediction else "no predictions yet"
+        except Exception as e:
+            return f"db error: {e}"
+        finally:
+            session.close()
 
     def initialize(self, predictor_plugin, feeder_plugin):
         """
@@ -103,22 +119,11 @@ class DefaultPipelinePlugin:
             return
 
         try:
-            self.db_conn = sqlite3.connect(db_path, check_same_thread=False)
-            cursor = self.db_conn.cursor()
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS predictions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                prediction_timestamp TEXT NOT NULL,
-                prediction TEXT NOT NULL,
-                uncertainty TEXT NOT NULL,
-                metadata TEXT NOT NULL
-            )
-            ''')
-            self.db_conn.commit()
+            self.engine = create_database_engine(f"sqlite:///{db_path}")
             print(f"Database initialized at {db_path}")
-        except sqlite3.Error as e:
+        except Exception as e:
             print(f"Database initialization failed: {e}")
-            self.db_conn = None
+            self.engine = None
 
     def _validate_system(self):
         """
@@ -133,10 +138,69 @@ class DefaultPipelinePlugin:
         if not self.feeder_plugin:
             print("Feeder plugin not available.")
             return False
-        if not self.db_conn:
+        if not self.engine:
             print("Database not connected.")
             return False
         return True
+
+    def request_prediction(self):
+        """
+        Requests a new prediction, creating a pending entry in the database.
+        Returns the ID of the new prediction request.
+        """
+        if not self.engine:
+            return None
+        session = get_session(self.engine)
+        try:
+            new_prediction = Prediction()
+            session.add(new_prediction)
+            session.commit()
+            return new_prediction.id
+        except Exception as e:
+            print(f"Failed to request prediction: {e}")
+            session.rollback()
+            return None
+        finally:
+            session.close()
+
+    def _run_single_cycle(self, prediction_id):
+        """
+        Execute a single prediction cycle for a given prediction ID.
+        """
+        if not self._validate_system():
+            print("Cannot run prediction cycle: system not properly initialized.")
+            return
+
+        try:
+            print(f"\n--- New prediction cycle started at {datetime.utcnow().isoformat()} ---")
+
+            # 1. Fetch data
+            print("Fetching data...")
+            input_df = self.feeder_plugin.fetch()
+
+            if input_df is None or input_df.empty:
+                print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
+                return
+
+            print(f"Data fetched successfully. Shape: {input_df.shape}")
+
+            # 2. Make prediction
+            print("Making prediction...")
+            prediction_output = self.predictor_plugin.predict_with_uncertainty(input_df)
+
+            if not prediction_output:
+                print("Warning: Prediction failed. Skipping storage.")
+                self._update_prediction_status(prediction_id, 'failed')
+                return
+
+            print("Prediction successful.")
+
+            # 3. Store prediction
+            self._store_prediction(prediction_id, prediction_output)
+
+        except Exception as e:
+            print(f"An error occurred in the prediction pipeline: {e}")
+            self._update_prediction_status(prediction_id, 'failed')
 
     def run(self):
         """
@@ -150,88 +214,71 @@ class DefaultPipelinePlugin:
         print("Prediction pipeline started.")
 
         while self.running:
-            try:
-                print(f"\n--- New prediction cycle started at {datetime.utcnow().isoformat()} ---")
-                
-                # 1. Fetch data
-                print("Fetching data...")
-                data_result = self.feeder_plugin.fetch_data_for_prediction()
-                
-                if not data_result or 'data' not in data_result or data_result['data'].empty:
-                    print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
-                    time.sleep(self.params.get("prediction_interval", 300))
-                    continue
-
-                input_df = data_result['data']
-                print(f"Data fetched successfully. Shape: {input_df.shape}")
-
-                # 2. Make prediction
-                print("Making prediction...")
-                prediction_output = self.predictor_plugin.predict_with_uncertainty(input_df)
-                
-                if not prediction_output:
-                    print("Warning: Prediction failed. Skipping storage.")
-                    continue
-
-                print("Prediction successful.")
-
-                # 3. Store prediction
-                self._store_prediction(prediction_output)
-
-            except Exception as e:
-                print(f"An error occurred in the prediction pipeline: {e}")
+            prediction_id = self.request_prediction()
+            if prediction_id:
+                self._run_single_cycle(prediction_id)
             
             # Wait for the next interval
             interval = self.params.get("prediction_interval", 300)
             print(f"--- Cycle finished. Waiting for {interval} seconds... ---")
             time.sleep(interval)
 
-    def _store_prediction(self, prediction_output):
+    def _update_prediction_status(self, prediction_id, status):
         """
-        Store the prediction output in the database.
+        Updates the status of a prediction in the database.
         """
-        if not self.db_conn:
-            print("Warning: Cannot store prediction, database not connected.")
+        if not self.engine:
+            return
+        session = get_session(self.engine)
+        try:
+            prediction = session.query(Prediction).filter_by(id=prediction_id).first()
+            if prediction:
+                prediction.status = status
+                session.commit()
+        except Exception as e:
+            print(f"Failed to update prediction status: {e}")
+            session.rollback()
+        finally:
+            session.close()
+
+    def _store_prediction(self, prediction_id, prediction_output):
+        """
+        Store the prediction output in the database for a given prediction ID.
+        """
+        if not self.engine:
+            print("Cannot store prediction: database not connected.")
+            self._update_prediction_status(prediction_id, 'failed')
             return
 
+        session = get_session(self.engine)
         try:
-            cursor = self.db_conn.cursor()
-            cursor.execute(
-                "INSERT INTO predictions (prediction_timestamp, prediction, uncertainty, metadata) VALUES (?, ?, ?, ?)",
-                (
-                    prediction_output['prediction_timestamp'],
-                    json.dumps(prediction_output['prediction']),
-                    json.dumps(prediction_output['uncertainty']),
-                    json.dumps(prediction_output['metadata'])
-                )
-            )
-            self.db_conn.commit()
-            print(f"Prediction stored successfully at {prediction_output['prediction_timestamp']}")
-        except sqlite3.Error as e:
-            print(f"Failed to store prediction: {e}")
+            prediction = session.query(Prediction).filter_by(id=prediction_id).first()
+            if prediction:
+                prediction.prediction_data = prediction_output
+                prediction.status = 'completed'
+                session.commit()
+                print(f"Successfully stored prediction for ID: {prediction_id}")
+            else:
+                print(f"Prediction with ID {prediction_id} not found.")
+                self._update_prediction_status(prediction_id, 'failed')
 
-    def stop(self):
-        """
-        Stop the prediction pipeline.
-        """
-        self.running = False
-        print("Prediction pipeline stopping...")
-        if self.db_conn:
-            self.db_conn.close()
-            print("Database connection closed.")
+        except Exception as e:
+            print(f"Failed to store prediction: {e}")
+            session.rollback()
+            self._update_prediction_status(prediction_id, 'failed')
+        finally:
+            session.close()
 
     def get_system_status(self):
         """
-        Get the current status of the prediction system.
+        Get the overall system status.
         """
         return {
-            'pipeline_enabled': self.params.get("pipeline_enabled", True),
-            'pipeline_running': self.running,
-            'predictor_available': self.predictor_plugin is not None,
-            'feeder_available': self.feeder_plugin is not None,
-            'system_ready': self._validate_system()
+            "system_ready": self._validate_system(),
+            "pipeline_running": self.running,
+            "last_prediction_status": self.get_last_prediction_status()
         }
-
+    
     def cleanup(self):
         """
         Cleanup pipeline resources.
