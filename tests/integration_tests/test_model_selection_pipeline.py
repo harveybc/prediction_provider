@@ -60,17 +60,17 @@ def test_model_selection_for_short_term_prediction(mock_plugins):
          patch.object(pipeline, '_validate_system', return_value=True):
         pipeline.initialize(mock_predictor, mock_feeder)
 
-    # Test parameter configuration
-    test_params = {
-        "prediction_interval": 300,
-        "log_level": "DEBUG"
-    }
-    
-    pipeline.set_params(**test_params)
+        # Test parameter configuration
+        test_params = {
+            "prediction_interval": 300,
+            "log_level": "DEBUG"
+        }
+        
+        pipeline.set_params(**test_params)
 
-    # Assert parameters are set correctly
-    assert pipeline.params["prediction_interval"] == 300
-    assert pipeline.params["log_level"] == "DEBUG"
-    
-    # Verify system validation works
-    assert pipeline._validate_system() == True
+        # Assert parameters are set correctly
+        assert pipeline.params["prediction_interval"] == 300
+        assert pipeline.params["log_level"] == "DEBUG"
+        
+        # Verify system validation works (within patch context)
+        assert pipeline._validate_system() == True

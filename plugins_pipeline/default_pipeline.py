@@ -8,7 +8,7 @@ from the feeder to the predictor and handling the results.
 
 import time
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from app.models import create_database_engine, get_session, Prediction
 
 class DefaultPipelinePlugin:
@@ -172,7 +172,7 @@ class DefaultPipelinePlugin:
             return
 
         try:
-            print(f"\n--- New prediction cycle started at {datetime.utcnow().isoformat()} ---")
+            print(f"\n--- New prediction cycle started at {datetime.now(timezone.utc).isoformat()} ---")
 
             # 1. Fetch data
             print("Fetching data...")

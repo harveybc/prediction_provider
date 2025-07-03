@@ -18,8 +18,8 @@ def test_prediction_lifecycle_in_database(client: TestClient, db_session: Sessio
     """
     # 1. Create a new prediction request
     response = client.post(
-        "/predict/",
-        json={"prediction_type": "long_term", "datetime": "2025-01-01T00:00:00Z"}
+        "/api/v1/predict",
+        json={"ticker": "AAPL", "model_name": "default", "prediction_horizon": 1}
     )
     assert response.status_code == 202
     data = response.json()
