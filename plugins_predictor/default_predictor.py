@@ -22,6 +22,7 @@ class DefaultPredictorPlugin:
     # Plugin parameters with default values
     plugin_params = {
         "model_path": None,
+        "normalization_params_path": None,  # Path to normalization params JSON
         "model_type": "keras",  # Options: 'keras', 'sklearn', 'pytorch'
         "prediction_horizon": 6,
         "mc_samples": 100,  # Monte Carlo samples for uncertainty estimation
@@ -30,13 +31,14 @@ class DefaultPredictorPlugin:
         "gpu_memory_limit": None,  # MB, None for no limit
         "enable_mixed_precision": False,
         "model_cache_size": 5,  # Number of models to keep in cache
-        "prediction_confidence_level": 0.95
+        "prediction_confidence_level": 0.95,
+        "prediction_target_column": "close_price" # The column to be predicted and de-normalized
     }
     
     # Debug variables for monitoring
     plugin_debug_vars = [
         "model_path", "model_type", "prediction_horizon", 
-        "mc_samples", "batch_size", "use_gpu"
+        "mc_samples", "batch_size", "use_gpu", "normalization_params_path"
     ]
     
     def __init__(self, config=None):
@@ -50,6 +52,7 @@ class DefaultPredictorPlugin:
         self.model = None
         self.model_cache = {}
         self.model_metadata = {}
+        self.normalization_params = None
         
         if config:
             self.set_params(**config)
@@ -66,6 +69,10 @@ class DefaultPredictorPlugin:
         """
         for key, value in kwargs.items():
             self.params[key] = value
+        
+        # Reload normalization params if the path changes
+        if 'normalization_params_path' in kwargs:
+            self._load_normalization_params()
     
     def get_debug_info(self):
         """
@@ -123,7 +130,25 @@ class DefaultPredictorPlugin:
         if self.params.get("enable_mixed_precision", False):
             policy = tf.keras.mixed_precision.Policy('mixed_float16')
             tf.keras.mixed_precision.set_global_policy(policy)
-    
+
+    def _load_normalization_params(self):
+        """
+        Load normalization parameters from the specified JSON file.
+        """
+        path = self.params.get("normalization_params_path")
+        if not path or not os.path.exists(path):
+            print(f"Warning: Normalization params file not found at {path}. De-normalization will be skipped.")
+            self.normalization_params = None
+            return
+
+        try:
+            with open(path, 'r') as f:
+                self.normalization_params = json.load(f)
+            print(f"Normalization parameters loaded successfully from {path}")
+        except Exception as e:
+            print(f"Failed to load or parse normalization parameters from {path}: {e}")
+            self.normalization_params = None
+
     def load_model(self, model_path=None):
         """
         Load a trained model from file.
@@ -167,6 +192,9 @@ class DefaultPredictorPlugin:
             # Load model metadata if available
             self._load_model_metadata(model_path)
             
+            # Load normalization parameters
+            self._load_normalization_params()
+
             print(f"Model loaded successfully: {model_path}")
             return True
             
@@ -284,7 +312,33 @@ class DefaultPredictorPlugin:
             
         except Exception as e:
             raise Exception(f"Prediction failed: {str(e)}")
-    
+
+    def _denormalize(self, predictions, uncertainties):
+        """
+        De-normalize predictions and uncertainties.
+        """
+        target_col = self.params.get("prediction_target_column", "close_price")
+
+        if self.normalization_params is None or target_col not in self.normalization_params:
+            print("Warning: Normalization parameters not available for target column. Skipping de-normalization.")
+            return predictions, uncertainties
+
+        stats = self.normalization_params[target_col]
+        mean = stats.get('mean', 0)
+        std = stats.get('std', 1)
+
+        if std == 0:
+            print("Warning: Standard deviation is zero. Cannot de-normalize.")
+            return predictions, uncertainties
+
+        # De-normalize predictions: value * std + mean
+        denormalized_preds = (predictions * std) + mean
+
+        # De-normalize uncertainties: value * std
+        denormalized_uncerts = uncertainties * std
+
+        return denormalized_preds, denormalized_uncerts
+
     def predict_with_uncertainty(self, input_data, mc_samples=None):
         """
         Make predictions with uncertainty estimation using Monte Carlo dropout.
@@ -305,8 +359,11 @@ class DefaultPredictorPlugin:
         try:
             # Ensure input data is properly shaped
             if isinstance(input_data, pd.DataFrame):
+                # Ensure columns are in the correct order if metadata is available
+                if self.model_metadata and 'feature_columns' in self.model_metadata:
+                    input_data = input_data[self.model_metadata['feature_columns']]
                 input_data = input_data.values
-            
+
             input_data = np.array(input_data)
             
             # Store predictions from multiple forward passes
@@ -334,15 +391,46 @@ class DefaultPredictorPlugin:
             # Calculate mean and standard deviation
             mean_predictions = np.mean(predictions_array, axis=0)
             uncertainty_estimates = np.std(predictions_array, axis=0)
+
+            # De-normalize the results
+            denormalized_preds, denormalized_uncerts = self._denormalize(mean_predictions, uncertainty_estimates)
+
+            # Format the output
+            output = {
+                "prediction_timestamp": datetime.utcnow().isoformat(),
+                "prediction": denormalized_preds.tolist(),
+                "uncertainty": denormalized_uncerts.tolist(),
+                "metadata": {
+                    "model_path": self.params.get("model_path"),
+                    "prediction_horizon": self.params.get("prediction_horizon"),
+                    "mc_samples": mc_samples,
+                    "de_normalized": self.normalization_params is not None
+                }
+            }
             
-            return mean_predictions, uncertainty_estimates
+            return output
             
         except Exception as e:
             # Fallback to regular prediction if uncertainty estimation fails
             print(f"Uncertainty estimation failed, using regular prediction: {str(e)}")
             predictions = self.predict(input_data)
             uncertainties = np.zeros_like(predictions)
-            return predictions, uncertainties
+
+            denormalized_preds, denormalized_uncerts = self._denormalize(predictions, uncertainties)
+            
+            output = {
+                "prediction_timestamp": datetime.utcnow().isoformat(),
+                "prediction": denormalized_preds.tolist(),
+                "uncertainty": denormalized_uncerts.tolist(),
+                "metadata": {
+                    "model_path": self.params.get("model_path"),
+                    "prediction_horizon": self.params.get("prediction_horizon"),
+                    "mc_samples": 0,
+                    "error": f"Uncertainty estimation failed: {str(e)}",
+                    "de_normalized": self.normalization_params is not None
+                }
+            }
+            return output
     
     def get_model_info(self):
         """

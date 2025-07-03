@@ -2,204 +2,142 @@
 """
 Default Core Plugin for Prediction Provider.
 
-Handles Flask application initialization, authentication, CORS, and global middleware.
+This plugin is the central orchestrator of the application. It handles:
+- Loading and managing all other plugins (feeder, predictor, pipeline, endpoints).
+- Initializing the system in the correct order.
+- Starting and stopping the application services.
 """
 
-from flask import Flask, request, jsonify, g
-from flask_cors import CORS
-import jwt
-from functools import wraps
-from datetime import datetime, timedelta
 import os
+import importlib
+import threading
 
 class DefaultCorePlugin:
-    """Default Core Plugin for Flask application setup."""
-    
+    """
+    The central core plugin for the Prediction Provider application.
+    """
+
     plugin_params = {
-        "auth_type": "none",  # none, basic, jwt
-        "jwt_secret": "prediction_provider_secret_key",
-        "jwt_expiration_hours": 24,
-        "allowed_origins": ["*"],
-        "cors_enabled": True,
-        "debug": False,
-        "database_url": "sqlite:///prediction_provider.db"
+        "plugin_directories": [
+            "plugins_feeder",
+            "plugins_predictor",
+            "plugins_pipeline",
+            "plugins_endpoints"
+        ]
     }
-    
-    plugin_debug_vars = ["auth_type", "cors_enabled", "debug", "database_url"]
-    
+
+    plugin_debug_vars = ["plugin_directories"]
+
     def __init__(self, config):
+        """
+        Initializes the core plugin.
+
+        Args:
+            config (dict): The global application configuration.
+        """
         self.params = self.plugin_params.copy()
-        self.config = config
-        self.app = None
-        
+        self.params.update(config)
+        self.plugins = {}
+        self.pipeline_thread = None
+
     def set_params(self, **kwargs):
         """
-        Actualiza los parámetros del core combinando los parámetros específicos con la configuración global.
+        Updates the core parameters.
         """
-        for key, value in kwargs.items():
-            self.params[key] = value
-    
+        self.params.update(kwargs)
+
     def get_debug_info(self):
         """
-        Devuelve información de debug de los parámetros relevantes del core.
+        Returns debug information for the core plugin.
         """
-        return {var: self.params.get(var) for var in self.plugin_debug_vars}
-    
-    def add_debug_info(self, debug_info):
+        info = {var: self.params.get(var) for var in self.plugin_debug_vars}
+        info["loaded_plugins"] = list(self.plugins.keys())
+        return info
+
+    def load_plugins(self):
         """
-        Agrega la información de debug al diccionario proporcionado.
+        Dynamically loads all plugins from the specified directories.
         """
-        debug_info.update(self.get_debug_info())
-    
-    def init_app(self, config):
+        print("--- Loading Plugins ---")
+        plugin_dirs = self.params.get("plugin_directories", [])
+        for plugin_dir in plugin_dirs:
+            if not os.path.isdir(plugin_dir):
+                print(f"Warning: Plugin directory not found: {plugin_dir}")
+                continue
+
+            for filename in os.listdir(plugin_dir):
+                if filename.endswith(".py") and not filename.startswith("__init__"):
+                    module_name = f"{plugin_dir}.{filename[:-3]}"
+                    try:
+                        module = importlib.import_module(module_name)
+                        for item_name in dir(module):
+                            item = getattr(module, item_name)
+                            if isinstance(item, type) and hasattr(item, 'plugin_params'):
+                                plugin_name = module_name.replace('.', '_')
+                                self.plugins[plugin_name] = item(self.params)
+                                print(f"Successfully loaded plugin: {plugin_name}")
+                    except Exception as e:
+                        print(f"Failed to load plugin from {module_name}: {e}")
+        print("--- Plugin Loading Finished ---")
+
+    def start(self):
         """
-        Initialize Flask application with core configuration.
-        
-        Args:
-            config (dict): Global configuration dictionary
-            
-        Returns:
-            Flask: Configured Flask application instance
+        Starts the application by initializing plugins and running the main pipeline.
         """
-        print("Initializing Flask application...")
-        
-        # Create Flask app
-        self.app = Flask(__name__)
-        
-        # Update params with config
-        self.set_params(**config)
-        
-        # Configure Flask app
-        self.app.config['SECRET_KEY'] = self.params.get('jwt_secret', 'prediction_provider_secret_key')
-        self.app.config['DEBUG'] = self.params.get('debug', False)
-        self.app.config['SQLALCHEMY_DATABASE_URI'] = self.params.get('database_url', 'sqlite:///prediction_provider.db')
-        
-        # Setup CORS if enabled
-        if self.params.get('cors_enabled', True):
-            allowed_origins = self.params.get('allowed_origins', ['*'])
-            CORS(self.app, origins=allowed_origins)
-            print(f"CORS enabled for origins: {allowed_origins}")
-        
-        # Setup authentication middleware
-        self._setup_authentication()
-        
-        # Setup database connection handling
-        self._setup_database()
-        
-        # Setup error handlers
-        self._setup_error_handlers()
-        
-        print(f"Flask application initialized with auth_type: {self.params.get('auth_type', 'none')}")
-        
-        return self.app
-    
-    def _setup_authentication(self):
-        """Setup authentication middleware based on auth_type."""
-        auth_type = self.params.get('auth_type', 'none')
-        
-        if auth_type == 'jwt':
-            @self.app.before_request
-            def verify_jwt():
-                # Skip authentication for preflight requests
-                if request.method == 'OPTIONS':
-                    return
-                
-                # Skip authentication for health endpoint
-                if request.endpoint in ['health', 'info']:
-                    return
-                
-                auth_header = request.headers.get('Authorization')
-                if not auth_header:
-                    return jsonify({'error': 'Authorization header required'}), 401
-                
-                try:
-                    token = auth_header.split(' ')[1]  # Bearer <token>
-                    payload = jwt.decode(
-                        token, 
-                        self.params['jwt_secret'], 
-                        algorithms=['HS256']
-                    )
-                    g.user_id = payload.get('user_id')
-                    g.username = payload.get('username')
-                except (IndexError, jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
-                    return jsonify({'error': 'Invalid or expired token'}), 401
-        
-        elif auth_type == 'basic':
-            @self.app.before_request
-            def verify_basic_auth():
-                # Skip authentication for preflight requests
-                if request.method == 'OPTIONS':
-                    return
-                
-                # Skip authentication for health endpoint
-                if request.endpoint in ['health', 'info']:
-                    return
-                
-                auth = request.authorization
-                if not auth or not self._check_basic_auth(auth.username, auth.password):
-                    return jsonify({'error': 'Invalid credentials'}), 401
-    
-    def _check_basic_auth(self, username, password):
-        """Check basic authentication credentials."""
-        # Simple hardcoded check - in production, use proper user management
-        valid_users = self.params.get('valid_users', {'admin': 'password'})
-        return username in valid_users and valid_users[username] == password
-    
-    def _setup_database(self):
-        """Setup database connection handling."""
-        from app.models import create_database_engine, get_session_maker
-        
-        @self.app.before_request
-        def setup_db_session():
-            """Create database session for each request."""
-            if not hasattr(g, 'db_engine'):
-                g.db_engine = create_database_engine(self.params['database_url'])
-                g.db_session_maker = get_session_maker(g.db_engine)
-                g.db_session = g.db_session_maker()
-        
-        @self.app.teardown_appcontext
-        def close_db_session(exception):
-            """Close database session after each request."""
-            db_session = getattr(g, 'db_session', None)
-            if db_session is not None:
-                db_session.close()
-    
-    def _setup_error_handlers(self):
-        """Setup global error handlers."""
-        
-        @self.app.errorhandler(404)
-        def not_found(error):
-            return jsonify({'error': 'Endpoint not found'}), 404
-        
-        @self.app.errorhandler(405)
-        def method_not_allowed(error):
-            return jsonify({'error': 'Method not allowed'}), 405
-        
-        @self.app.errorhandler(500)
-        def internal_error(error):
-            return jsonify({'error': 'Internal server error'}), 500
-    
-    def generate_jwt_token(self, user_id, username):
+        print("--- Starting Application ---")
+        self.load_plugins()
+
+        # Retrieve specific plugins
+        feeder = self._get_plugin_by_type("plugins_feeder")
+        predictor = self._get_plugin_by_type("plugins_predictor")
+        pipeline = self._get_plugin_by_type("plugins_pipeline")
+        endpoints = self._get_plugin_by_type("plugins_endpoints")
+
+        if not all([feeder, predictor, pipeline]):
+            print("Error: Core plugins (feeder, predictor, pipeline) are missing. Cannot start.")
+            return
+
+        # Initialize the pipeline
+        print("Initializing the prediction pipeline...")
+        pipeline.initialize(predictor_plugin=predictor, feeder_plugin=feeder)
+
+        # Start the pipeline in a background thread
+        self.pipeline_thread = threading.Thread(target=pipeline.run, daemon=True)
+        self.pipeline_thread.start()
+        print("Prediction pipeline is running in the background.")
+
+        # Initialize and start the endpoints server if it exists
+        if endpoints:
+            print("Initializing and starting the endpoints server...")
+            endpoints.initialize(pipeline_plugin=pipeline)
+            endpoints.run()
+        else:
+            print("No endpoints plugin found. Running in headless mode.")
+            # Keep the main thread alive to allow the pipeline to run
+            self.pipeline_thread.join()
+
+    def stop(self):
         """
-        Generate JWT token for authentication.
-        
-        Args:
-            user_id (int): User ID
-            username (str): Username
-            
-        Returns:
-            str: JWT token
+        Stops the application and cleans up resources.
         """
-        expiration_hours = self.params.get('jwt_expiration_hours', 24)
-        payload = {
-            'user_id': user_id,
-            'username': username,
-            'exp': datetime.utcnow() + timedelta(hours=expiration_hours),
-            'iat': datetime.utcnow()
-        }
+        print("--- Stopping Application ---")
+        pipeline = self._get_plugin_by_type("plugins_pipeline")
+        if pipeline:
+            pipeline.stop()
         
-        token = jwt.encode(payload, self.params['jwt_secret'], algorithm='HS256')
-        return token
+        if self.pipeline_thread and self.pipeline_thread.is_alive():
+            self.pipeline_thread.join(timeout=10)
+
+        print("Application stopped.")
+
+    def _get_plugin_by_type(self, dir_prefix):
+        """
+        Finds the first loaded plugin from a given directory prefix.
+        """
+        for name, plugin in self.plugins.items():
+            if name.startswith(dir_prefix):
+                return plugin
+        return None
 
 # For backward compatibility
 Plugin = DefaultCorePlugin

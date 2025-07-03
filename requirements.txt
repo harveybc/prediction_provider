@@ -26,3 +26,4 @@ sqlalchemy
 pyjwt
 psutil
 requests
+yfinance

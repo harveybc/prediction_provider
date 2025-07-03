@@ -1,8 +1,67 @@
-# Prediction Provider - File-Level Reference
+# Prediction Provider - Files Reference Documentation
 
-## 1. `DefaultFeederPlugin` - Feature Generation & Normalization
+## 1. Project Structure
 
-**File:** `feeder_plugins/default_feeder.py`
+```
+/
+├── app/
+│   ├── __init__.py
+│   ├── cli.py
+│   ├── config.py
+│   ├── config_handler.py
+│   ├── config_merger.py
+│   ├── main.py
+│   ├── models.py
+│   └── plugin_loader.py
+├── plugins_core/
+│   ├── __init__.py
+│   └── default_core.py
+├── plugins_endpoints/
+│   ├── __init__.py
+│   ├── health_endpoint.py
+│   ├── info_endpoint.py
+│   ├── metrics_endpoint.py
+│   └── predict_endpoint.py
+├── plugins_feeder/
+│   ├── __init__.py
+│   └── default_feeder.py
+├── plugins_pipeline/
+│   ├── __init__.py
+│   └── default_pipeline.py
+├── plugins_predictor/
+│   ├── __init__.py
+│   └── default_predictor.py
+├── examples/
+│   ├── config/
+│   ├── data/
+│   └── results/
+├── tests/
+│   ├── acceptance_tests/
+│   ├── integration_tests/
+│   ├── system_tests/
+│   └── unit_tests/
+├── .gitignore
+├── a_new_file.txt
+├── pp.bat
+├── pp.sh
+├── prediction_provider.db
+├── pyproject.toml
+├── README.md
+├── REFERENCE.md
+├── REFERENCE_files.md
+├── REFERNECE_plugins.md
+├── requirements.txt
+├── set_env.bat
+├── set_env.sh
+├── setup.py
+└── test_service.py
+```
+
+---
+
+## 2. `DefaultFeederPlugin` - Feature Generation & Normalization
+
+**File:** `plugins_feeder/default_feeder.py`
 
 This plugin is responsible for creating the exact data structure required by the `DefaultPredictorPlugin`. Its primary duties are to source raw data, compute a comprehensive set of features, and normalize the data according to a strict specification.
 
@@ -16,9 +75,9 @@ This plugin is responsible for creating the exact data structure required by the
 
 ---
 
-## 2. `DefaultPredictorPlugin` - Model Input Requirements
+## 3. `DefaultPredictorPlugin` - Model Input Requirements
 
-**File:** `predictor_plugins/default_predictor.py`
+**File:** `plugins_predictor/default_predictor.py`
 
 This plugin loads the pre-trained Keras model and performs inference. It has a strict data contract and expects the input data to be in a precise format.
 

@@ -26,7 +26,7 @@ DEFAULT_VALUES = {
 
     # --- Predictor Configuration ---
     # Parameters for the predictor plugin, which handles model loading and inference.
-    "model_path": "./predictor_model.keras", # Path to the trained Keras model.
+    "model_path": "examples/results/phase_3_2/phase_3_2_cnn_25200_1h_predictor_model.h5.keras", # Path to the trained Keras model.
     "window_size": 256,  # Number of time steps required by the model. Must match batch_size.
     "mc_samples": 100, # Number of Monte Carlo samples for uncertainty estimation.
 
