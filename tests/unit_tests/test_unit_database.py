@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 # Assuming database models and utilities are in these paths
-from app.database_models import Base, User, Role, PredictionJob, APILog, TimeSeriesData
+from app.database_models import Base, User, Role, PredictionJob, ApiLog, TimeSeriesData
 from app.database_utilities import get_db_session, create_all_tables
 
 class TestUnitDatabase(unittest.TestCase):

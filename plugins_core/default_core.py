@@ -11,22 +11,28 @@ This plugin is the central orchestrator of the application. It handles:
 import os
 import importlib
 import threading
+from fastapi import FastAPI
+import uvicorn
+
+# The FastAPI app instance is created here, making it accessible for tests
+app = FastAPI(
+    title="Prediction Provider API",
+    description="A robust, plugin-based, asynchronous prediction provider for financial time series.",
+    version="0.1.0"
+)
 
 class DefaultCorePlugin:
     """
     The central core plugin for the Prediction Provider application.
+    This plugin is responsible for managing the FastAPI application lifecycle.
     """
 
     plugin_params = {
-        "plugin_directories": [
-            "plugins_feeder",
-            "plugins_predictor",
-            "plugins_pipeline",
-            "plugins_endpoints"
-        ]
+        "host": "127.0.0.1",
+        "port": 8000,
     }
 
-    plugin_debug_vars = ["plugin_directories"]
+    plugin_debug_vars = ["host", "port"]
 
     def __init__(self, config):
         """
@@ -38,8 +44,7 @@ class DefaultCorePlugin:
         self.params = self.plugin_params.copy()
         self.params.update(config)
         self.plugins = {}
-        self.pipeline_thread = None
-        self.endpoints_thread = None
+        self.app = app  # Use the module-level app instance
 
     def set_params(self, **kwargs):
         """
@@ -47,76 +52,38 @@ class DefaultCorePlugin:
         """
         self.params.update(kwargs)
 
-    def get_debug_info(self):
+    def set_plugins(self, plugins: dict):
         """
-        Returns debug information for the core plugin.
+        Receives all loaded plugins from the main orchestrator.
+        It then registers the necessary components, like API endpoints.
         """
-        info = {var: self.params.get(var) for var in self.plugin_debug_vars}
-        info["loaded_plugins"] = list(self.plugins.keys())
-        return info
-
-    def load_plugins(self):
-        """
-        Dynamically loads all plugins from the specified directories.
-        """
-        print("--- Loading Plugins ---")
-        plugin_dirs = self.params.get("plugin_directories", [])
-        for plugin_dir in plugin_dirs:
-            if not os.path.isdir(plugin_dir):
-                print(f"Warning: Plugin directory not found: {plugin_dir}")
-                continue
-
-            for filename in os.listdir(plugin_dir):
-                if filename.endswith(".py") and not filename.startswith("__init__"):
-                    module_name = f"{plugin_dir}.{filename[:-3]}"
-                    try:
-                        module = importlib.import_module(module_name)
-                        for item_name in dir(module):
-                            item = getattr(module, item_name)
-                            if isinstance(item, type) and hasattr(item, 'plugin_params'):
-                                plugin_name = module_name.replace('.', '_')
-                                self.plugins[plugin_name] = item(self.params)
-                                print(f"Successfully loaded plugin: {plugin_name}")
-                    except Exception as e:
-                        print(f"Failed to load plugin from {module_name}: {e}")
-        print("--- Plugin Loading Finished ---")
+        self.plugins = plugins
+        print("Core plugin received plugins:", list(self.plugins.keys()))
+        
+        endpoints_plugin = self.plugins.get('endpoints')
+        if endpoints_plugin and hasattr(endpoints_plugin, 'register_routes'):
+            print("Registering routes from endpoints plugin...")
+            endpoints_plugin.register_routes(self.app)
+        else:
+            print("Warning: Endpoints plugin not found or it lacks a 'register_routes' method.")
 
     def start(self):
         """
-        Starts the application by initializing plugins and running the main pipeline.
+        Starts the FastAPI application using uvicorn.
         """
-        print("--- Starting Application ---")
-        self.load_plugins()
-
-        # Retrieve specific plugins
-        feeder = self._get_plugin_by_type("plugins_feeder")
-        predictor = self._get_plugin_by_type("plugins_predictor")
-        pipeline = self._get_plugin_by_type("plugins_pipeline")
-        endpoints = self._get_plugin_by_type("plugins_endpoints")
-
-        if not all([feeder, predictor, pipeline]):
-            print("Error: Core plugins (feeder, predictor, pipeline) are missing. Cannot start.")
-            return
-
-        # Initialize the pipeline
-        pipeline.initialize(predictor, feeder)
-
-        # Initialize endpoints if available
-        if endpoints:
-            endpoints.initialize(pipeline)
-            # Run Flask app in a separate thread
-            self.endpoints_thread = threading.Thread(target=endpoints.run, daemon=True)
-            self.endpoints_thread.start()
-
-        # Start the pipeline processing in a background thread
-        self.pipeline_thread = threading.Thread(target=pipeline.run, daemon=True)
-        self.pipeline_thread.start()
-
-        print("--- Application Started ---")
+        print(f"--- Starting FastAPI Server at http://{self.params['host']}:{self.params['port']} ---")
+        try:
+            uvicorn.run(
+                self.app,
+                host=self.params['host'],
+                port=self.params['port']
+            )
+        except Exception as e:
+            print(f"Error starting uvicorn server: {e}")
 
     def stop(self):
         """
-        Stops the application.
+        Stops the application. Uvicorn handles graceful shutdown.
         """
         print("--- Stopping Application ---")
         # This is a simplified stop mechanism. A more robust implementation

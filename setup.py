@@ -33,6 +33,9 @@ setup(
         ]
     },
     install_requires=[
+        'fastapi',
+        'uvicorn[standard]',
+        'python-multipart',
         'flask',
         'pandas',
         'numpy',
