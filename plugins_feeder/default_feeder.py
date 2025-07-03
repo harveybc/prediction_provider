@@ -16,7 +16,7 @@ import os
 import pandas_ta as ta
 import yfinance as yf
 
-class DefaultFeederPlugin:
+class DefaultFeeder:
     """
     Default data feeder plugin for fetching financial market data.
     """
@@ -194,3 +194,16 @@ class DefaultFeederPlugin:
         df = df[final_cols]
 
         return df.tail(self.params.get("window_size"))
+
+    def fetch_data_sync(self, ticker, start_date, end_date):
+        """
+        Synchronous method to fetch data for a given ticker and date range.
+        This method is used by the unit tests.
+        """
+        try:
+            import yfinance as yf
+            data = yf.download(ticker, start=start_date, end=end_date)
+            return data
+        except Exception as e:
+            # Re-raise the exception to allow tests to catch it
+            raise e

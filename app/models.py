@@ -7,6 +7,9 @@ from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import date
 
 Base = declarative_base()
 
@@ -14,16 +17,22 @@ class Prediction(Base):
     __tablename__ = 'predictions'
 
     id = Column(Integer, primary_key=True)
+    task_id = Column(String, unique=True, nullable=False)
     timestamp = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     status = Column(String, nullable=False, default='pending')
-    prediction_data = Column(JSON, nullable=True)
+    prediction_type = Column(String, nullable=True)
+    prediction = Column(JSON, nullable=True)
+    uncertainty = Column(JSON, nullable=True)
 
     def to_dict(self):
         return {
             'id': self.id,
+            'task_id': self.task_id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
             'status': self.status,
-            'prediction_data': self.prediction_data
+            'prediction_type': self.prediction_type,
+            'prediction': self.prediction,
+            'uncertainty': self.uncertainty
         }
 
 def create_database_engine(database_url):
@@ -39,3 +48,9 @@ def get_session(engine):
     """Create and return a new session."""
     Session = sessionmaker(bind=engine)
     return Session()
+
+class PredictionRequest(BaseModel):
+    ticker: str
+    model_name: str = "default_model"
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None

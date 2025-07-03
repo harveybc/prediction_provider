@@ -21,6 +21,23 @@ app = FastAPI(
     version="0.1.0"
 )
 
+class PluginManager:
+    """A simple manager to register and retrieve plugins by name."""
+    def __init__(self):
+        self._plugins = {}
+
+    def register(self, plugin):
+        """Registers a plugin instance."""
+        if not hasattr(plugin, 'name'):
+            # The test uses a mock with a .name attribute.
+            # This check makes the class more robust.
+            return
+        self._plugins[plugin.name] = plugin
+
+    def get(self, name):
+        """Retrieves a plugin by its name."""
+        return self._plugins.get(name)
+
 class DefaultCorePlugin:
     """
     The central core plugin for the Prediction Provider application.

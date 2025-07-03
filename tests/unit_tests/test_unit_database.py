@@ -16,20 +16,21 @@ class TestUnitDatabase(unittest.TestCase):
     """
 
     @patch('app.database_utilities.create_engine')
-    def test_create_all_tables(self, mock_create_engine):
+    @patch('app.database_models.Base.metadata.create_all')
+    def test_create_all_tables(self, mock_create_all, mock_create_engine):
         """
         Test that the create_all_tables function invokes the SQLAlchemy metadata creation.
         """
         # Arrange: Mock the engine and its `connect` method
         mock_engine = MagicMock()
         mock_create_engine.return_value = mock_engine
-        
+
         # Act: Call the function to create tables
         create_all_tables("sqlite:///:memory:")
 
         # Assert: Verify that the `create_all` method was called on the Base metadata
         mock_create_engine.assert_called_once_with("sqlite:///:memory:")
-        Base.metadata.create_all.assert_called_once_with(bind=mock_engine)
+        mock_create_all.assert_called_once_with(bind=mock_engine)
 
     @patch('app.database_utilities.create_engine')
     @patch('app.database_utilities.sessionmaker')

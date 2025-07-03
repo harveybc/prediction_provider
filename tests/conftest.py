@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import app
+from plugins_core.default_core import app
 from app.database import Base, get_db
 
 # Add the project root to the Python path
@@ -32,6 +32,6 @@ def override_get_db():
 app.dependency_overrides[get_db] = override_get_db
 
 @pytest.fixture(scope="module")
-def test_client():
+def client():
     with TestClient(app) as c:
         yield c

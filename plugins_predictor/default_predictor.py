@@ -14,7 +14,7 @@ import os
 import json
 from datetime import datetime
 
-class DefaultPredictorPlugin:
+class DefaultPredictor:
     """
     Default predictor plugin for loading models and making predictions.
     """
@@ -53,6 +53,7 @@ class DefaultPredictorPlugin:
         self.model_cache = {}
         self.model_metadata = {}
         self.normalization_params = None
+        self.model_dir = "plugins_predictor/models"  # Add this for unit tests
         
         if config:
             self.set_params(**config)
@@ -488,3 +489,21 @@ class DefaultPredictorPlugin:
                 return False
         
         return True
+    
+    def _get_model_path(self, model_name):
+        """
+        Construct the full path to a model file.
+        """
+        return os.path.join(self.model_dir, f"{model_name}.keras")
+
+    def predict(self, model_name, data):
+        """
+        Make a prediction using the specified model.
+        """
+        model_path = self._get_model_path(model_name)
+        model = tf.keras.models.load_model(model_path)
+        prediction = model.predict(data)
+        return {
+            "prediction": prediction[0][0],
+            "uncertainty": prediction[0][1]
+        }
