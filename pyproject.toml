@@ -3,6 +3,9 @@ requires = ["setuptools>=42", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests",
+]
 filterwarnings = [
     "ignore::PendingDeprecationWarning:starlette.*",
     "ignore::DeprecationWarning:pandas_ta.*",

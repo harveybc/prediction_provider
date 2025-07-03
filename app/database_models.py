@@ -10,7 +10,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint
 )
 from sqlalchemy.orm import relationship, declarative_base
-import datetime
+from datetime import datetime, timezone
 
 Base = declarative_base()
 
@@ -39,8 +39,8 @@ class PredictionJob(Base):
     status = Column(String, nullable=False, default='pending', index=True)
     request_payload = Column(JSON, nullable=False)
     result = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     
     requester = relationship("User", back_populates="predictions")
 
@@ -52,7 +52,7 @@ class ApiLog(Base):
     ip_address = Column(String, nullable=False)
     endpoint = Column(String, nullable=False, index=True)
     method = Column(String, nullable=False)
-    request_timestamp = Column(DateTime, default=datetime.datetime.utcnow, nullable=False)
+    request_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     response_status_code = Column(Integer, nullable=False)
     response_time_ms = Column(Float, nullable=False)
     

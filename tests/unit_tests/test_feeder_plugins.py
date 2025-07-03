@@ -30,8 +30,8 @@ def test_get_data_for_long_term_prediction(mock_read_csv, feeder):
         "prediction_type": "long_term"
     }
 
-    # Execute the get_data method
-    data = feeder.get_data(**request_params)
+    # Execute the fetch method
+    data = feeder.fetch()
 
     # Assert that pandas.read_csv was called (path might need adjustment)
     mock_read_csv.assert_called_once()
@@ -60,7 +60,7 @@ def test_get_data_for_short_term_prediction(mock_read_csv, feeder):
         "prediction_type": "short_term"
     }
 
-    data = feeder.get_data(**request_params)
+    data = feeder.fetch()
 
     mock_read_csv.assert_called_once()
     assert data is not None
@@ -72,8 +72,4 @@ def test_feeder_handles_missing_data_file(feeder):
     """
     with patch('pandas.read_csv', side_effect=FileNotFoundError):
         with pytest.raises(FileNotFoundError):
-            feeder.get_data(
-                datetime="2025-07-02T00:00:00Z",
-                window_size=128,
-                prediction_type="short_term"
-            )
+            feeder.fetch()
