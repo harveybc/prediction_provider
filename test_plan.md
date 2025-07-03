@@ -34,6 +34,10 @@ The requirements are captured in the following documents, which serve as the sin
 
 **Objective**: To verify that the complete, running system meets the primary business requirements from the perspective of a remote client, such as the Live Trading System (LTS).
 
+**Acceptance Test Files:**
+*   **`test_acceptance.py`**: Contains the core test for the asynchronous prediction workflow.
+*   **`test_lts_workflow.py`**: Contains tests specifically simulating the complex, concurrent workflow of the LTS client.
+
 **Test Case 1: `test_lts_full_workflow`**
 *   **User Story**: "As the LTS, I need to get both short-term and long-term predictions for a specific datetime to make trading decisions. I will make two consecutive requests and poll for their results asynchronously."
 *   **Test Steps**:
@@ -92,65 +96,32 @@ The requirements are captured in the following documents, which serve as the sin
 
 **Objective**: To verify that directly connected modules and plugins interact correctly according to the new requirements.
 
-**Test Case 1: `test_model_selection_pipeline`**
-*   **Goal**: Ensure the pipeline correctly selects the model and parameters based on the request.
-*   **Test Steps**:
-    1.  Instantiate the `default_pipeline` plugin.
-    2.  Mock the `default_feeder` and `default_predictor`.
-    3.  Call the pipeline's `run` method with `"prediction_type": "long_term"`.
-    4.  Assert that the feeder was called with the correct `window_size` (288).
-    5.  Assert that the predictor was instructed to load the long-term Keras model.
+**Database Schema and Models**:
+To support authentication, authorization, and logging, a comprehensive database schema has been defined in `app/database_models.py`. It includes the following tables:
+*   `users`: Stores user profiles, hashed API keys, and role assignments.
+*   `roles`: Defines roles (e.g., "admin", "user") and their permissions in a JSON field.
+*   `prediction_jobs`: Tracks the status and results of every prediction request, linked to a user.
+*   `api_logs`: Provides a detailed audit trail of all API requests, including user, endpoint, and performance metrics.
+*   `time_series_data`: Stores the raw time series data used for predictions, preventing redundant fetches.
 
-**Test Case 2: `test_database_prediction_lifecycle`**
-*   **Goal**: Verify the database record correctly reflects the state of a prediction job.
-*   **Test Steps**:
-    1.  Directly invoke the function that creates a new prediction job.
-    2.  Assert that a new row exists in the `predictions` table with `status: "pending"`.
-    3.  Directly invoke the function that updates the job status.
-    4.  Assert the row's `status` is now `"processing"`.
-    5.  Directly invoke the function that finalizes the job with a result.
-    6.  Assert the row's `status` is `"completed"` and the `result` column is populated.
+**Integration Test Files:**
+*   **`test_database_schema.py`**: Verifies that the SQLAlchemy models in `app/database_models.py` are correctly defined and that the tables and columns match the specification.
+*   **`test_plugin_loading.py`**: Ensures the `PluginLoader` can correctly discover, import, and instantiate all five types of plugins (`feeder`, `predictor`, `pipeline`, `core`, `endpoints`).
+*   **`test_database_interaction.py`**: Tests the complete lifecycle of a prediction job in the database, from creation (`pending`) to completion (`completed`/`failed`), including result storage and status updates.
+*   **`test_prediction_pipeline.py`**: Validates the end-to-end data flow through the default pipeline, ensuring the `DefaultFeeder` fetches data, the `DefaultPipeline` processes it, and the `DefaultPredictor` generates a result.
 
-### 4. Unit Tests (Single Component)
+### 4. Unit Tests (Individual Components)
 
-**Objective**: To test individual functions and classes in isolation.
+**Objective**: To test the smallest parts of the application in complete isolation, using mocks to substitute external dependencies. This ensures that each component's internal logic is correct.
 
-**Test Case 1: `test_api_endpoint_validation`**
-*   **Goal**: Verify the `/api/v1/predictions/` endpoint validation logic.
-*   **Test Steps**:
-    1.  Test the endpoint with a missing `prediction_type`. Assert a `422 Unprocessable Entity` error.
-    2.  Test with an invalid `prediction_type` (e.g., "medium_term"). Assert a `422` error.
-    3.  Test with a missing `datetime`. Assert a `422` error.
-
-**Test Case 2: `test_model_loader`**
-*   **Goal**: Verify the logic that maps a `prediction_type` to a model file path.
-*   **Test Steps**:
-    1.  Call the model loading utility with `"short_term"`. Assert it returns the correct path for the short-term model.
-    2.  Call it with `"long_term"`. Assert it returns the correct path for the long-term model.
-
-**Test Case 3: `test_auth_middleware`**
-*   **Goal**: Test the API authentication middleware in isolation.
-*   **Test Steps**:
-    1.  Simulate a request with a valid token. Assert the request is passed through.
-    2.  Simulate a request with an invalid token. Assert an HTTP exception is raised.
-    3.  Simulate a request with a missing token. Assert an HTTP exception is raised.
+*   **`test_unit_endpoints.py`**: Verifies the FastAPI endpoint logic. Mocks the core system to ensure endpoints correctly handle incoming requests, validate parameters, and format responses without engaging the full prediction workflow.
+*   **`test_unit_predictor.py`**: Tests the `DefaultPredictor` plugin. Verifies its internal data validation, preprocessing, and model-calling logic using sample `pd.DataFrame` objects, mocking the ML model itself.
+*   **`test_unit_core.py`**: Focuses on the `CoreSystem`'s logic for managing plugins, orchestrating the prediction workflow, and handling configuration, with all external plugins and database interactions mocked.
+*   **`test_unit_feeder.py`**: Isolates and tests the `DefaultFeeder` plugin. Mocks the `yfinance` API to validate its data-fetching methods and error handling for various API responses (success, failure, empty data).
+*   **`test_unit_database.py`**: Tests the database utility functions (`get_db_session`, `create_all_tables`). Mocks the database engine and session objects to confirm that the utilities perform the correct SQLAlchemy calls without touching a real database.
 
 ---
 
-## Phase 3 & 4: Implementation and Execution Plan
+## Phase 3 & 4: Implementation and Execution
 
-1.  **Code Review**: Review all existing application code (`app/`, `plugins_*`) and test code (`tests/`) to ensure they align with the designs specified above.
-2.  **Run Unit Tests**: Execute `pytest tests/unit_tests/`. Fix any failures until all unit tests pass. These must pass before proceeding.
-3.  **Run Integration Tests**: Execute `pytest tests/integration_tests/`. Fix any failures.
-4.  **Run System Tests**: Execute `pytest tests/system_tests/`. Fix any failures.
-5.  **Run Acceptance Tests**: Execute `pytest tests/acceptance_tests/`. This is the final validation.
-
-This structured approach ensures that we build the system from the ground up on a foundation of verified components, leading to a robust and reliable final product.
-
-- [x] Create the new test directory structure: `tests/acceptance_tests/`, `tests/system_tests/`, `tests/integration_tests/`, `tests/unit_tests/`.
-- [x] Write acceptance tests based strictly on the requirements and user stories from the documentation.
-- [x] Write system tests to verify orchestration, security, and database integrity.
-- [x] Write integration tests for plugin interactions.
-- [x] Write unit tests for each module and plugin.
-- [ ] Only after all tests are defined, begin implementing code to make the tests pass, starting with unit tests and moving up the hierarchy.
-- [x] Update `test_plan.md` as needed to reflect any changes or clarifications in requirements or test order.
+With all tests now fully defined and documented, the next step is to implement the application code required to make these tests pass, followed by the execution of the test suite in the prescribed order (Unit → Integration → System → Acceptance).
