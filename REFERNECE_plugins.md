@@ -1,102 +1,114 @@
-# REFERENCE_plugins.md
-**Prediction Provider - Detailed Plugin Design Document**
+# Prediction Provider - Plugin Reference
 
-Este documento describe de forma extensa, precisa y estructurada los **tipos de plugins requeridos en el sistema prediction_provider**, especificando para cada tipo de plugin su funcionalidad exacta, los métodos clave y los parámetros a utilizar. Todas las clases de plugins deben inicializarse con un parámetro obligatorio `config` (tipo `dict`), el cual se obtiene desde el módulo central `app/config.py` y es sobreescrito por parámetros de CLI, archivos JSON locales o configuraciones remotas.
-
----
-
-## 1. pipeline plugins
-
-### 1.1 Objetivo
-Orquestan el flujo de procesamiento dentro del prediction_provider desde la recepción de los datos hasta la entrega de la predicción, permitiendo realizar transformaciones previas y posteriores a la predicción.
-
-### 1.2 Métodos mínimos
-- `__init__(self, config: dict)`: inicializa el plugin con la configuración global de la aplicación.
-- `run(self, data: pd.DataFrame) -> pd.DataFrame`: ejecuta la secuencia definida del pipeline sobre el dataframe de entrada, devolviendo el dataframe procesado.
-
-### 1.3 Parámetros relevantes en config
-- `pipeline.steps`: lista ordenada de operaciones a realizar, por ejemplo: `["normalize", "impute", "feature_selection", "post_processing"]`.
-- `pipeline.logging`: nivel de log deseado para el pipeline (e.g., `INFO`, `DEBUG`).
+This document provides a detailed, structured description of the required plugin types in the `prediction_provider` system. It specifies the exact functionality, key methods, and configuration parameters for each plugin type. All plugin classes must be initialized with a mandatory `config` parameter (type `dict`), which is sourced from the central `app/config.py` module and can be overridden by CLI arguments, local JSON files, or remote configurations.
 
 ---
 
-## 2. data_feeder plugins
+## 1. `data_feeder` Plugins
 
-### 2.1 Objetivo
-Obtener y preparar los últimos `n_batches * batch_size` registros de todas las características requeridas por el predictor o el pipeline. Cada feeder define cómo y desde dónde obtiene los datos de entrada (live, histórico, sintético).
+### 1.1. Objective
+The primary role of a `data_feeder` plugin is to fetch, construct, and prepare the complete feature set required by the `predictor` or `pipeline` plugins. It is responsible for sourcing all necessary data for the last `n_batches * batch_size` time steps and ensuring it is correctly formatted and normalized.
 
-### 2.2 Métodos mínimos
-- `__init__(self, config: dict)`: inicializa el plugin con la configuración global.
-- `fetch(self) -> pd.DataFrame`: obtiene y retorna un dataframe con los registros actualizados.
+### 1.2. Key Methods
+- `__init__(self, config: dict)`: Initializes the plugin with the global application configuration.
+- `fetch(self) -> pd.DataFrame`: Fetches, processes, and returns an updated DataFrame with all required features.
 
-### 2.3 Parámetros relevantes en config
-- `data_feeder.instrument`: identificador del activo o instrumento financiero a alimentar.
-- `data_feeder.api_url`: URL del proveedor de datos si aplica.
-- `data_feeder.batch_size`: número de registros a traer por lote.
-- `data_feeder.n_batches`: número de lotes a acumular.
-- `data_feeder.lookback`: número de ticks/hora/días hacia atrás a considerar para cada predicción.
+### 1.3. `DefaultFeederPlugin` - Step-by-Step Logic
 
----
+The `default_feeder` is responsible for the entire data preparation pipeline. Here is a granular breakdown of its responsibilities:
 
-## 3. predictor plugins
+1.  **Data Sourcing**:
+    *   **Primary Instrument (e.g., EUR/USD)**: Fetch hourly OHLC (Open, High, Low, Close) data.
+    *   **Correlated Instruments (e.g., S&P 500, VIX)**: Fetch daily or hourly data. If daily, the last known value must be forward-filled for each hour of the current day.
+    *   **High-Frequency Data**: For each hourly timestamp, fetch the close prices for the last 8 ticks from both 15-minute and 30-minute timeframes.
 
-### 3.1 Objetivo
-Cargar modelos pre-entrenados y generar predicciones. Estos plugins permiten soportar múltiples formatos de modelos (e.g., Keras, ONNX) o servicios externos.
+2.  **Feature Calculation**:
+    *   **Technical Indicators**: Calculate all standard indicators (RSI, MACD, ADX, etc.) using the hourly OHLC data.
+    *   **Bar-Based Features**: Compute features like `BC-BO` (previous bar's close - open) and `BH-BL` (previous bar's high - low).
+    *   **Time-Based Features**: Extract `day_of_month`, `hour_of_day`, and `day_of_week` from the primary `DATE_TIME` column.
 
-### 3.2 Métodos mínimos
-- `__init__(self, config: dict)`: inicializa el plugin con la configuración global.
-- `load_model(self)`: carga el modelo desde disco, almacenamiento remoto o servicio externo.
-- `predict(self, data: pd.DataFrame) -> np.ndarray`: realiza la inferencia sobre el dataframe y devuelve las predicciones como arreglo numpy.
+3.  **DataFrame Assembly**:
+    *   Combine all sourced and calculated features into a single pandas DataFrame.
+    *   Ensure the DataFrame contains the **exact 45 columns** specified in `REFERENCE.md` and that they are in the correct order.
 
-### 3.3 Parámetros relevantes en config
-- `predictor.model_type`: tipo de modelo (`keras`, `onnx`, `remote`, etc.).
-- `predictor.model_path`: ruta local o URL del modelo a cargar.
-- `predictor.device`: dispositivo para inferencia (e.g., `cpu`, `cuda`).
-- `predictor.scaling`: configuración opcional para normalización inversa tras la predicción (e.g., `z-score`, `min-max`).
+4.  **Normalization**:
+    *   Load the `min` and `max` normalization values from the JSON file specified by the `use_normalization_json` config parameter.
+    *   Apply min-max scaling to **all 44 feature columns** (everything except `DATE_TIME`) to normalize them to a `[0, 1]` range.
 
----
-
-## 4. api_endpoints plugins
-
-### 4.1 Objetivo
-Definir endpoints RESTful individuales de la API Flask para exponer funcionalidad externa del prediction_provider como predicciones, status o métricas.
-
-### 4.2 Métodos mínimos
-- `__init__(self, config: dict)`: inicializa el plugin con la configuración global.
-- `register(self, app: Flask)`: registra el endpoint en la instancia de Flask pasada como parámetro.
-
-### 4.3 Parámetros relevantes en config
-- `api_endpoints.route`: ruta específica del endpoint (e.g., `/predict`, `/health`, `/info`).
-- `api_endpoints.methods`: lista de métodos HTTP permitidos (e.g., `["GET", "POST"]`).
-- `api_endpoints.auth_required`: flag booleano que indica si el endpoint requiere autenticación.
+### 1.4. Relevant `config` Parameters
+- `feeder_plugin`: The name of the feeder plugin to use (e.g., `'default_feeder'`).
+- `instrument`: The financial instrument to target (e.g., `'EUR/USD'`).
+- `n_batches`: Number of batches to retrieve.
+- `batch_size`: Number of records per batch.
+- `use_normalization_json`: **Crucial path** to the JSON file containing min/max values for normalization.
 
 ---
 
-## 5. api_core plugins
+## 2. `predictor` Plugins
 
-### 5.1 Objetivo
-Gestionar la configuración central del servidor Flask API, incluyendo autenticación, CORS, middleware y opciones globales de seguridad.
+### 2.1. Objective
+`predictor` plugins are responsible for loading pre-trained models and generating predictions. They are designed to be agnostic to the model format (e.g., Keras, ONNX, etc.).
 
-### 5.2 Métodos mínimos
-- `__init__(self, config: dict)`: inicializa el plugin con la configuración global.
-- `init_app(self, app: Flask)`: aplica configuraciones globales sobre la instancia de Flask, como middlewares de autenticación o manejo de CORS.
+### 2.2. Key Methods
+- `__init__(self, config: dict)`: Initializes the plugin with the global configuration.
+- `load_model(self)`: Loads the model from the path specified in the configuration.
+- `predict(self, data: np.ndarray) -> np.ndarray`: Performs inference on the input data and returns the prediction.
 
-### 5.3 Parámetros relevantes en config
-- `api_core.auth_type`: tipo de autenticación global (`none`, `basic`, `jwt`).
-- `api_core.jwt_secret`: clave secreta para autenticación JWT si aplica.
-- `api_core.allowed_origins`: lista de dominios permitidos para CORS.
-- `api_core.port`: puerto en el que se expondrá el servidor Flask.
-- `api_core.debug`: habilita o desactiva modo debug del servidor Flask.
+### 2.3. Expected Input Data Format
+The `default_predictor` expects a NumPy array with the following characteristics:
+-   **Shape**: The input array's shape must be `(1, 256, 44)`, where:
+    -   `1` is the batch size for a single prediction.
+    -   `256` is the `window_size`.
+    -   `44` is the number of feature columns (all columns from the feeder except `DATE_TIME`).
+-   **Normalization**: All values **must** be normalized to a `[0, 1]` range according to the same `use_normalization_json` file used by the feeder.
+
+### 2.4. Relevant `config` Parameters
+- `predictor_plugin`: The name of the predictor plugin to use (e.g., `'default_predictor'`).
+- `model_path`: The local file path to the trained model (e.g., `'./predictor_model.keras'`).
+- `window_size`: The number of time steps the model requires for one prediction (e.g., `256`).
+- `mc_samples`: The number of Monte Carlo samples for uncertainty estimation.
 
 ---
 
-## 6. Consideraciones generales
+## 3. `pipeline` Plugins
 
-- Todos los plugins deben manejar de forma robusta el parámetro `config` y documentar los parámetros específicos que utilizan.
-- La coherencia en la definición de métodos mínimos entre plugins es clave para mantener compatibilidad con el sistema actual de carga dinámica.
-- La arquitectura debe permitir la ejecución de varios plugins del mismo tipo (por ejemplo, múltiples `data_feeder`) en paralelo, para soportar la alimentación de varios instrumentos en un solo servidor prediction_provider.
-- Se recomienda implementar validación exhaustiva de configuraciones en el `__init__` de cada plugin para evitar errores silenciosos durante la ejecución.
+### 3.1. Objective
+Orchestrate the processing flow from data reception to prediction delivery, allowing for pre- and post-processing transformations.
+
+### 3.2. Key Methods
+- `__init__(self, config: dict)`: Initializes the plugin.
+- `run(self, data: pd.DataFrame) -> pd.DataFrame`: Executes the defined pipeline sequence.
+
+### 3.3. Relevant `config` Parameters
+- `pipeline_plugin`: The name of the pipeline plugin to use (e.g., `'default_pipeline'`).
 
 ---
 
-**Fin del documento**
+## 4. `endpoint` Plugins
+
+### 4.1. Objective
+Define individual RESTful API endpoints using Flask to expose the provider's functionality.
+
+### 4.2. Key Methods
+- `__init__(self, config: dict)`: Initializes the plugin.
+- `register(self, app: Flask)`: Registers the endpoint with the Flask application instance.
+
+### 4.3. Relevant `config` Parameters
+- `endpoint_plugins`: A list of endpoint plugins to load (e.g., `['predict_endpoint']`).
+
+---
+
+## 5. `core` Plugins
+
+### 5.1. Objective
+Initialize and configure the core Flask application, including setting up middleware, authentication, and other global settings.
+
+### 5.2. Key Methods
+- `__init__(self, config: dict)`: Initializes the plugin.
+- `setup(self, app: Flask)`: Applies core configurations to the Flask app.
+
+### 5.3. Relevant `config` Parameters
+- `core_plugin`: The name of the core plugin to use (e.g., `'default_core'`).
+- `server_host`: The host for the server.
+- `server_port`: The port for the server.
+- `debug`: Flask debug mode.
