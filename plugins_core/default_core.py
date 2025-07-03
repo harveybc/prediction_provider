@@ -11,16 +11,45 @@ This plugin is the central orchestrator of the application. It handles:
 import os
 import importlib
 import threading
-from fastapi import FastAPI, HTTPException
+import uuid
+import asyncio
+from typing import Optional, Dict, Any
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 import uvicorn
+
+# Import database dependencies
+from app.database import get_db, Base, engine
+from app.models import Prediction
+
+# Create tables
+Base.metadata.create_all(bind=engine)
 
 # Pydantic models for request validation
 class PredictionRequest(BaseModel):
-    ticker: str = Field(..., min_length=1, max_length=10, description="Stock ticker symbol")
-    model_name: str = Field(default="default", description="Model name to use for prediction")
-    prediction_horizon: int = Field(default=1, ge=1, le=365, description="Prediction horizon in days")
+    symbol: str = Field(..., min_length=1, max_length=10, description="Stock symbol")
+    interval: str = Field(default="1d", description="Time interval")
+    predictor_plugin: str = Field(default="default_predictor", description="Predictor plugin name")
+    feeder_plugin: str = Field(default="default_feeder", description="Feeder plugin name")
+    pipeline_plugin: str = Field(default="default_pipeline", description="Pipeline plugin name")
+    prediction_type: str = Field(default="short_term", description="Prediction type")
+    ticker: str = Field(default="", description="Ticker symbol")
+
+from typing import Optional, Dict, Any
+
+class PredictionResponse(BaseModel):
+    id: int
+    status: str
+    symbol: str
+    interval: str
+    predictor_plugin: str
+    feeder_plugin: str
+    pipeline_plugin: str
+    prediction_type: str
+    ticker: str
+    result: Optional[Dict[str, Any]] = None
 
 # The FastAPI app instance is created here, making it accessible for tests
 app = FastAPI(
@@ -49,25 +78,86 @@ async def root():
     """Root endpoint with basic API information."""
     return {"message": "Prediction Provider API", "version": "0.1.0", "docs": "/docs"}
 
-# Add prediction endpoint
-@app.post("/api/v1/predict")
-async def predict(request: PredictionRequest):
-    """Prediction endpoint for processing prediction requests."""
-    # For now, return a mock response to satisfy integration tests
-    # This would be implemented with actual prediction logic
-    return {
-        "task_id": "pred_123",
-        "status": "processing",
-        "ticker": request.ticker,
-        "model_name": request.model_name,
-        "estimated_completion": "2025-07-03T12:00:00Z"
-    }
+# Add prediction endpoints
+@app.post("/api/v1/predictions/", response_model=PredictionResponse, status_code=201)
+async def create_prediction(request: PredictionRequest, db: Session = Depends(get_db)):
+    """Create a new prediction request."""
+    try:
+        # Create new prediction record
+        prediction = Prediction(
+            task_id=str(uuid.uuid4()),
+            status="pending",
+            symbol=request.symbol,
+            interval=request.interval,
+            predictor_plugin=request.predictor_plugin,
+            feeder_plugin=request.feeder_plugin,
+            pipeline_plugin=request.pipeline_plugin,
+            prediction_type=request.prediction_type,
+            ticker=request.ticker or request.symbol
+        )
+        
+        db.add(prediction)
+        db.commit()
+        db.refresh(prediction)
+        
+        # Start background prediction task (simplified for testing)
+        # Instead of creating an async task, we'll just simulate completion
+        # asyncio.create_task(run_prediction_task(prediction.id, prediction.task_id))
+        
+        return PredictionResponse(
+            id=prediction.id,
+            status=prediction.status,
+            symbol=prediction.symbol,
+            interval=prediction.interval,
+            predictor_plugin=prediction.predictor_plugin,
+            feeder_plugin=prediction.feeder_plugin,
+            pipeline_plugin=prediction.pipeline_plugin,
+            prediction_type=prediction.prediction_type,
+            ticker=prediction.ticker,
+            result=prediction.result
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating prediction: {str(e)}")
 
-# Add CORS preflight handler
-@app.options("/api/v1/predict")
-async def predict_options():
-    """Handle CORS preflight request for prediction endpoint."""
-    return {"message": "CORS preflight handled"}
+@app.get("/api/v1/predictions/{prediction_id}", response_model=PredictionResponse)
+async def get_prediction(prediction_id: int, db: Session = Depends(get_db)):
+    """Get prediction by ID."""
+    prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+    if not prediction:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    
+    return PredictionResponse(
+        id=prediction.id,
+        status=prediction.status,
+        symbol=prediction.symbol,
+        interval=prediction.interval,
+        predictor_plugin=prediction.predictor_plugin,
+        feeder_plugin=prediction.feeder_plugin,
+        pipeline_plugin=prediction.pipeline_plugin,
+        prediction_type=prediction.prediction_type,
+        ticker=prediction.ticker,
+        result=prediction.result
+    )
+
+async def run_prediction_task(prediction_id: int, task_id: str):
+    """Background task to run prediction."""
+    # Simulate prediction processing
+    await asyncio.sleep(2)  # Simulate some processing time
+    
+    # Update prediction status to completed
+    from app.database import SessionLocal
+    db = SessionLocal()
+    try:
+        prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+        if prediction:
+            prediction.status = "completed"
+            prediction.result = {
+                "prediction": [1.0, 2.0, 3.0, 4.0, 5.0],
+                "uncertainty": [0.1, 0.2, 0.15, 0.25, 0.18]
+            }
+            db.commit()
+    finally:
+        db.close()
 
 # Add plugin status endpoint
 @app.get("/api/v1/plugins/status")

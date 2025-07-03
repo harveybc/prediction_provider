@@ -10,6 +10,7 @@ Entry point for the Prediction Provider application. This script orchestrates:
 
 import sys
 from typing import Any, Dict
+import logging
 
 # Add the project root to the Python path to allow for absolute imports
 import os
@@ -20,6 +21,21 @@ from app.cli import parse_args
 from app.config import DEFAULT_VALUES
 from app.plugin_loader import load_plugin
 from app.config_merger import merge_config, process_unknown_args
+
+# Import the FastAPI app for tests
+from plugins_core.default_core import app
+
+def setup_logging(level=logging.INFO):
+    """Setup logging configuration."""
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler('app.log')
+        ]
+    )
+    return logging.getLogger(__name__)
 
 def main():
     """

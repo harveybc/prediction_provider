@@ -4,22 +4,30 @@ Database models for the Prediction Provider system using SQLAlchemy.
 """
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date
+from app.database import Base
 
-Base = declarative_base()
+# Use the Base from database module
 
 class Prediction(Base):
     __tablename__ = 'predictions'
 
     id = Column(Integer, primary_key=True)
-    task_id = Column(String, unique=True, nullable=False)
+    task_id = Column(String, unique=True, nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     status = Column(String, nullable=False, default='pending')
+    symbol = Column(String, nullable=True)
+    interval = Column(String, nullable=True)
+    predictor_plugin = Column(String, nullable=True)
+    feeder_plugin = Column(String, nullable=True)
+    pipeline_plugin = Column(String, nullable=True)
     prediction_type = Column(String, nullable=True)
+    ticker = Column(String, nullable=True)
+    result = Column(JSON, nullable=True)
     prediction = Column(JSON, nullable=True)
     uncertainty = Column(JSON, nullable=True)
 
@@ -29,7 +37,14 @@ class Prediction(Base):
             'task_id': self.task_id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
             'status': self.status,
+            'symbol': self.symbol,
+            'interval': self.interval,
+            'predictor_plugin': self.predictor_plugin,
+            'feeder_plugin': self.feeder_plugin,
+            'pipeline_plugin': self.pipeline_plugin,
             'prediction_type': self.prediction_type,
+            'ticker': self.ticker,
+            'result': self.result,
             'prediction': self.prediction,
             'uncertainty': self.uncertainty
         }

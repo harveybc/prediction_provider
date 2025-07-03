@@ -10,66 +10,70 @@ def feeder():
     """Provides a DefaultFeeder instance for testing."""
     return DefaultFeeder()
 
-@patch('pandas.read_csv')
-def test_get_data_for_long_term_prediction(mock_read_csv, feeder):
+@patch('plugins_feeder.default_feeder.yf.Ticker')
+def test_feeder_fetch_data_successfully(mock_yf_ticker, feeder):
     """
-    Tests the feeder's ability to retrieve and process data for a
-    long-term prediction, which requires a specific window size (288).
+    Tests the feeder's ability to retrieve and process data successfully.
     """
-    # Create a mock DataFrame
+    # Create a mock DataFrame with proper OHLC structure
     mock_df = pd.DataFrame({
-        'timestamp': pd.to_datetime(['2025-06-30', '2025-07-01', '2025-07-02']),
-        'value': [100, 102, 105]
-    })
-    mock_read_csv.return_value = mock_df
-
-    # Define request parameters
-    request_params = {
-        "datetime": "2025-07-02T00:00:00Z",
-        "window_size": 288,
-        "prediction_type": "long_term"
-    }
+        'Open': [100, 102, 105],
+        'High': [101, 103, 106],
+        'Low': [99, 101, 104],
+        'Close': [100, 102, 105],
+        'Volume': [1000, 1100, 1200]
+    }, index=pd.date_range('2025-06-30', periods=3, freq='h'))
+    
+    # Mock the ticker instance and its history method
+    mock_ticker_instance = MagicMock()
+    mock_ticker_instance.history.return_value = mock_df
+    mock_yf_ticker.return_value = mock_ticker_instance
 
     # Execute the fetch method
     data = feeder.fetch()
 
-    # Assert that pandas.read_csv was called (path might need adjustment)
-    mock_read_csv.assert_called_once()
-
-    # Assert that the returned data is not empty
+    # Assert that yfinance Ticker was called
+    mock_yf_ticker.assert_called()
+    # Assert that data is returned
     assert data is not None
-    # Further assertions can be made about the shape or content of the data
-    # For example, checking if the data is a numpy array or a pandas series
-    # as expected by the predictor plugins.
+    assert isinstance(data, pd.DataFrame)
 
-@patch('pandas.read_csv')
-def test_get_data_for_short_term_prediction(mock_read_csv, feeder):
+@patch('plugins_feeder.default_feeder.yf.Ticker')
+def test_feeder_handles_different_parameters(mock_yf_ticker, feeder):
     """
-    Tests the feeder's ability to retrieve and process data for a
-    short-term prediction with a window size of 128.
+    Tests that the feeder correctly handles different parameter configurations.
     """
     mock_df = pd.DataFrame({
-        'timestamp': pd.to_datetime(['2025-07-01', '2025-07-02']),
-        'value': [102, 105]
-    })
-    mock_read_csv.return_value = mock_df
+        'Open': [102, 105],
+        'High': [103, 106],
+        'Low': [101, 104],
+        'Close': [102, 105],
+        'Volume': [1100, 1200]
+    }, index=pd.date_range('2025-07-01', periods=2, freq='h'))
+    
+    # Mock the ticker instance and its history method
+    mock_ticker_instance = MagicMock()
+    mock_ticker_instance.history.return_value = mock_df
+    mock_yf_ticker.return_value = mock_ticker_instance
 
-    request_params = {
-        "datetime": "2025-07-02T00:00:00Z",
-        "window_size": 128,
-        "prediction_type": "short_term"
-    }
+    # Set different parameters
+    feeder.set_params(instrument="AAPL", batch_size=128)
 
     data = feeder.fetch()
 
-    mock_read_csv.assert_called_once()
+    mock_yf_ticker.assert_called()
     assert data is not None
+    assert isinstance(data, pd.DataFrame)
 
-def test_feeder_handles_missing_data_file(feeder):
+@patch('plugins_feeder.default_feeder.yf.Ticker')
+def test_feeder_handles_fetch_error(mock_yf_ticker, feeder):
     """
-    Tests that the feeder plugin raises a FileNotFoundError when the
-    data source (e.g., a CSV file) is not available.
+    Tests that the feeder plugin handles errors during data fetching gracefully.
     """
-    with patch('pandas.read_csv', side_effect=FileNotFoundError):
-        with pytest.raises(FileNotFoundError):
-            feeder.fetch()
+    # Mock yfinance to raise an exception
+    mock_ticker_instance = MagicMock()
+    mock_ticker_instance.history.side_effect = Exception("Network error")
+    mock_yf_ticker.return_value = mock_ticker_instance
+    
+    with pytest.raises(Exception):
+        feeder.fetch()

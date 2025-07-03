@@ -29,6 +29,7 @@ def test_full_prediction_lifecycle(test_client):
     2. Poll the status until it's complete.
     3. Retrieve the prediction and verify the results.
     """
+    print("Starting test_full_prediction_lifecycle")
     prediction_data = {
         "symbol": "AAPL",
         "interval": "1d",
@@ -38,19 +39,25 @@ def test_full_prediction_lifecycle(test_client):
     }
     
     # 1. Create a prediction
+    print("Creating prediction...")
     response = test_client.post("/api/v1/predictions/", json=prediction_data)
+    print(f"Create response status: {response.status_code}")
     assert response.status_code == 201
     prediction = response.json()
+    print(f"Created prediction: {prediction}")
     prediction_id = prediction["id"]
     assert prediction["status"] == "pending"
 
     # 2. Poll for completion
+    print("Polling for completion...")
     timeout = 60  # 60 seconds
     start_time = time.time()
     while time.time() - start_time < timeout:
         response = test_client.get(f"/api/v1/predictions/{prediction_id}")
+        print(f"Poll response status: {response.status_code}")
         assert response.status_code == 200
         status = response.json()["status"]
+        print(f"Current status: {status}")
         if status == "completed":
             break
         elif status == "failed":
@@ -60,6 +67,7 @@ def test_full_prediction_lifecycle(test_client):
         pytest.fail("Prediction did not complete within the timeout period.")
 
     # 3. Retrieve and verify
+    print("Retrieving final result...")
     response = test_client.get(f"/api/v1/predictions/{prediction_id}")
     assert response.status_code == 200
     final_prediction = response.json()
@@ -69,4 +77,5 @@ def test_full_prediction_lifecycle(test_client):
     assert final_prediction["symbol"] == "AAPL"
     assert "result" in final_prediction
     assert final_prediction["result"] is not None
+    print("Test completed successfully!")
 
