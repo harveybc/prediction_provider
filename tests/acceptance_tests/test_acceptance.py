@@ -2,6 +2,7 @@ import pytest
 import requests
 import uuid
 import time
+import concurrent.futures
 from fastapi.testclient import TestClient
 from app.main import app  # Assuming your FastAPI app is in app/main.py
 
@@ -209,4 +210,77 @@ def test_asynchronous_prediction_workflow(test_client):
     assert final_prediction["result"] is not None
     assert "prediction" in final_prediction["result"]
     assert "uncertainty" in final_prediction["result"]
+
+def test_lts_full_workflow(test_client):
+    """
+    Test the full LTS client workflow: health check, two consecutive prediction
+    requests (short and long-term), and asynchronous polling for results.
+    """
+    # 1. Health Check
+    # Assuming a /health endpoint will be implemented
+    response = test_client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+    # 2. Request Short-Term Prediction
+    short_term_data = {
+        "symbol": "GOOGL", "interval": "1h", "prediction_type": "short_term"
+    }
+    response_short = test_client.post("/api/v1/predictions/", json=short_term_data)
+    assert response_short.status_code == 201
+    id_short = response_short.json()["id"]
+
+    # 3. Request Long-Term Prediction
+    long_term_data = {
+        "symbol": "GOOGL", "interval": "1d", "prediction_type": "long_term"
+    }
+    response_long = test_client.post("/api/v1/predictions/", json=long_term_data)
+    assert response_long.status_code == 201
+    id_long = response_long.json()["id"]
+
+    # 4. Asynchronous Polling
+    def poll_for_result(prediction_id):
+        timeout = 180  # 3 minutes
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            res = test_client.get(f"/api/v1/predictions/{prediction_id}")
+            if res.json()["status"] == "completed":
+                return res.json()
+            if res.json()["status"] == "failed":
+                pytest.fail(f"Prediction {prediction_id} failed.")
+            time.sleep(5)
+        pytest.fail(f"Prediction {prediction_id} timed out.")
+
+    # Use threading to poll for both results concurrently
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future_short = executor.submit(poll_for_result, id_short)
+        future_long = executor.submit(poll_for_result, id_long)
+        
+        result_short = future_short.result()
+        result_long = future_long.result()
+
+    # 5. Verify Results
+    assert result_short["status"] == "completed"
+    assert len(result_short["result"]["prediction"]) == 6
+    assert len(result_short["result"]["uncertainty"]) == 6
+
+    assert result_long["status"] == "completed"
+    assert len(result_long["result"]["prediction"]) == 6
+    assert len(result_long["result"]["uncertainty"]) == 6
+
+def test_lts_partial_failure(test_client):
+    """
+    Test that if one prediction request is invalid, the other proceeds normally.
+    """
+    # 1. Request Valid Prediction
+    valid_data = {"symbol": "MSFT", "interval": "1d", "prediction_type": "short_term"}
+    response_valid = test_client.post("/api/v1/predictions/", json=valid_data)
+    assert response_valid.status_code == 201
+    id_valid = response_valid.json()["id"]
+
+    # 2. Request Invalid Prediction
+    invalid_data = {"symbol": "MSFT", "interval": "1d", "prediction_type": "invalid_type"}
+    response_invalid = test_client.post("/api/v1/predictions/", json=invalid_data)
+    # The initial validation should catch this immediately
+    assert response_invalid.status_code == 422
 
