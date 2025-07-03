@@ -4,9 +4,8 @@ Database models for the Prediction Provider system using SQLAlchemy.
 """
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
-from datetime import datetime
+from sqlalchemy.orm import sessionmaker, declarative_base
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date
@@ -18,7 +17,7 @@ class Prediction(Base):
 
     id = Column(Integer, primary_key=True)
     task_id = Column(String, unique=True, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     status = Column(String, nullable=False, default='pending')
     prediction_type = Column(String, nullable=True)
     prediction = Column(JSON, nullable=True)

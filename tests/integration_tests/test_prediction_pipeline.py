@@ -8,7 +8,7 @@ import numpy as np
 from unittest.mock import MagicMock, patch
 
 # Assuming the plugins are in these paths
-from plugins_pipeline.default_pipeline import DefaultPipeline
+from plugins_pipeline.default_pipeline import DefaultPipelinePlugin
 from plugins_feeder.default_feeder import DefaultFeeder
 from plugins_predictor.default_predictor import DefaultPredictor
 

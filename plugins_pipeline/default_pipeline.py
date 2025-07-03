@@ -279,6 +279,12 @@ class DefaultPipelinePlugin:
             "last_prediction_status": self.get_last_prediction_status()
         }
     
+    def stop(self):
+        """
+        Stop the pipeline execution.
+        """
+        self.running = False
+    
     def cleanup(self):
         """
         Cleanup pipeline resources.
