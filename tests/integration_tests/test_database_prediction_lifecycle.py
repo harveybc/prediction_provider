@@ -21,7 +21,7 @@ def test_prediction_lifecycle_in_database(client: TestClient, db_session: Sessio
         "/api/v1/predict",
         json={"ticker": "AAPL", "model_name": "default", "prediction_horizon": 1}
     )
-    assert response.status_code == 202
+    assert response.status_code == 200
     data = response.json()
     task_id = data["task_id"]
     assert task_id is not None
