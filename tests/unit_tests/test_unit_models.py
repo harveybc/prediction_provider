@@ -91,7 +91,14 @@ class TestUnitModels(unittest.TestCase):
             'task_id': 'task_123',
             'timestamp': '2024-01-01T12:00:00',
             'status': 'completed',
+            'symbol': None,
+            'interval': None,
+            'predictor_plugin': None,
+            'feeder_plugin': None,
+            'pipeline_plugin': None,
             'prediction_type': 'stock',
+            'ticker': None,
+            'result': None,
             'prediction': {'value': 150.0},
             'uncertainty': {'std': 5.0}
         }

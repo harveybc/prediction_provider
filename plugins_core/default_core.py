@@ -17,7 +17,7 @@ import logging
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 import uvicorn
 import time
@@ -31,20 +31,43 @@ Base.metadata.create_all(bind=engine)
 
 # Pydantic models for request validation
 class PredictionRequest(BaseModel):
-    symbol: str = Field(..., min_length=1, max_length=10, description="Stock symbol")
+    symbol: Optional[str] = Field(default=None, min_length=1, max_length=10, description="Stock symbol")
     interval: str = Field(default="1d", description="Time interval")
     predictor_plugin: str = Field(default="default_predictor", description="Predictor plugin name")
     feeder_plugin: str = Field(default="default_feeder", description="Feeder plugin name")
     pipeline_plugin: str = Field(default="default_pipeline", description="Pipeline plugin name")
     prediction_type: str = Field(default="short_term", description="Prediction type")
-    ticker: str = Field(default="", description="Ticker symbol")
+    ticker: Optional[str] = Field(default=None, description="Ticker symbol")
     
-    @validator('prediction_type')
+    # Alternative field names for compatibility
+    model_name: Optional[str] = Field(default=None, description="Model name (maps to predictor_plugin)")
+    prediction_horizon: Optional[int] = Field(default=1, description="Prediction horizon")
+    
+    @field_validator('prediction_type')
+    @classmethod
     def validate_prediction_type(cls, v):
         allowed_types = ['short_term', 'long_term', 'medium_term']
         if v not in allowed_types:
             raise ValueError(f'prediction_type must be one of {allowed_types}')
         return v
+    
+    @model_validator(mode='after')
+    def validate_symbol_or_ticker(self):
+        """Validate that at least one symbol field is provided."""
+        if not self.symbol and not self.ticker:
+            raise ValueError("Either symbol or ticker must be provided")
+        return self
+    
+    def get_symbol(self) -> str:
+        """Get the symbol from either symbol or ticker field."""
+        symbol = self.symbol or self.ticker
+        if not symbol:
+            raise ValueError("Either symbol or ticker must be provided")
+        return symbol
+    
+    def get_predictor_plugin(self) -> str:
+        """Get the predictor plugin from either predictor_plugin or model_name field."""
+        return self.model_name or self.predictor_plugin
 
 from typing import Optional, Dict, Any
 
@@ -58,7 +81,9 @@ class PredictionResponse(BaseModel):
     pipeline_plugin: str
     prediction_type: str
     ticker: str
+    task_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+    model_name: Optional[str] = None  # For backward compatibility
 
 # The FastAPI app instance is created here, making it accessible for tests
 app = FastAPI(
@@ -102,30 +127,28 @@ async def root():
 
 # Add prediction endpoints
 @app.post("/api/v1/predictions/", response_model=PredictionResponse, status_code=201)
-async def create_prediction(request: PredictionRequest, db: Session = Depends(get_db)):
+async def create_prediction(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Create a new prediction request."""
     try:
         # Create new prediction record
         prediction = Prediction(
             task_id=str(uuid.uuid4()),
             status="pending",
-            symbol=request.symbol,
+            symbol=request.get_symbol(),
             interval=request.interval,
-            predictor_plugin=request.predictor_plugin,
+            predictor_plugin=request.get_predictor_plugin(),
             feeder_plugin=request.feeder_plugin,
             pipeline_plugin=request.pipeline_plugin,
             prediction_type=request.prediction_type,
-            ticker=request.ticker or request.symbol
+            ticker=request.get_symbol()
         )
         
         db.add(prediction)
         db.commit()
         db.refresh(prediction)
         
-        # Start background prediction task using threading
-        thread = threading.Thread(target=run_prediction_task_sync, args=(prediction.id, prediction.task_id))
-        thread.daemon = True
-        thread.start()
+        # Start background prediction task using FastAPI's BackgroundTasks
+        background_tasks.add_task(run_prediction_task_sync, prediction.id, prediction.task_id)
         
         return PredictionResponse(
             id=prediction.id,
@@ -137,7 +160,9 @@ async def create_prediction(request: PredictionRequest, db: Session = Depends(ge
             pipeline_plugin=prediction.pipeline_plugin,
             prediction_type=prediction.prediction_type,
             ticker=prediction.ticker or prediction.symbol or "",
-            result=prediction.result
+            task_id=prediction.task_id,
+            result=prediction.result,
+            model_name=prediction.predictor_plugin
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating prediction: {str(e)}")
@@ -159,7 +184,9 @@ async def get_prediction(prediction_id: int, db: Session = Depends(get_db)):
         pipeline_plugin=prediction.pipeline_plugin,
         prediction_type=prediction.prediction_type,
         ticker=prediction.ticker or prediction.symbol or "",
-        result=prediction.result
+        task_id=prediction.task_id,
+        result=prediction.result,
+        model_name=prediction.predictor_plugin
     )
     
 @app.get("/api/v1/predictions/")
@@ -176,7 +203,9 @@ async def get_all_predictions(db: Session = Depends(get_db)):
         pipeline_plugin=pred.pipeline_plugin,
         prediction_type=pred.prediction_type,
         ticker=pred.ticker or pred.symbol or "",
-        result=pred.result
+        task_id=pred.task_id,
+        result=pred.result,
+        model_name=pred.predictor_plugin
     ) for pred in predictions]
 
 @app.delete("/api/v1/predictions/{prediction_id}")
@@ -221,7 +250,7 @@ async def get_prediction_status_legacy(prediction_id: str, db: Session = Depends
 
 # Add predict endpoint for acceptance tests that expect it
 @app.post("/predict")
-async def predict_legacy(request: dict, db: Session = Depends(get_db)):
+async def predict_legacy(request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Legacy predict endpoint for backward compatibility."""
     # Convert legacy format to new format
     prediction_request = PredictionRequest(
@@ -251,16 +280,20 @@ async def predict_legacy(request: dict, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(prediction)
     
-    # Start background prediction task
-    thread = threading.Thread(target=run_prediction_task_sync, args=(prediction.id, prediction.task_id))
-    thread.daemon = True
-    thread.start()
+    # Start background prediction task using FastAPI's BackgroundTasks
+    background_tasks.add_task(run_prediction_task_sync, prediction.id, prediction.task_id)
     
     return {
         "prediction_id": prediction.task_id,
         "status": "pending",
         "message": "Prediction request accepted"
     }
+
+# Add predict endpoint for integration tests
+@app.post("/api/v1/predict", response_model=PredictionResponse, status_code=201)
+async def predict_api(request: PredictionRequest, db: Session = Depends(get_db)):
+    """Create a new prediction request via the /api/v1/predict endpoint."""
+    return await create_prediction(request, db)
 
 def run_prediction_task_sync(prediction_id: int, task_id: str):
     """Synchronous background task to run prediction."""
@@ -462,3 +495,9 @@ class DefaultCorePlugin:
 
 # For backward compatibility
 Plugin = DefaultCorePlugin
+
+# Add OPTIONS handler for CORS
+@app.options("/api/v1/predict")
+async def predict_options():
+    """Handle OPTIONS requests for CORS."""
+    return {"message": "OK"}

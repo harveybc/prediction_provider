@@ -1,5 +1,14 @@
 import sys
 import os
+import multiprocessing
+import warnings
+
+# Suppress multiprocessing warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
+
+# Set multiprocessing start method to avoid fork issues
+if multiprocessing.get_start_method(allow_none=True) is None:
+    multiprocessing.set_start_method('spawn', force=True)
 
 import pytest
 from fastapi.testclient import TestClient

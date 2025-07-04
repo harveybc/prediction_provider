@@ -48,7 +48,7 @@ class TestAPIIntegration:
         response = client.post("/api/v1/predict", json=request_payload)
         
         # Assert
-        assert response.status_code in [200, 202]  # Accept async processing
+        assert response.status_code in [200, 201, 202]  # Accept async processing
         data = response.json()
         assert "task_id" in data or "prediction" in data
     

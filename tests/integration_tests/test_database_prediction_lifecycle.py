@@ -16,7 +16,7 @@ def test_prediction_api_basic_functionality(client: TestClient, db_session: Sess
         "/api/v1/predict",
         json={"ticker": "AAPL", "model_name": "default", "prediction_horizon": 1}
     )
-    assert response.status_code == 200
+    assert response.status_code in [200, 201]
     data = response.json()
     task_id = data["task_id"]
     assert task_id is not None
