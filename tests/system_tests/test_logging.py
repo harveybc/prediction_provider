@@ -28,23 +28,23 @@ def test_request_logging(test_client, caplog):
     log_records = [record.message for record in caplog.records]
     
     # Check for logs from both requests
-    # This is a basic check; more detailed checks could parse the log format
-    assert any("POST /api/v1/predictions/" in msg and "201 Created" in msg for msg in log_records)
-    assert any("POST /api/v1/predictions/" in msg and "422 Unprocessable Entity" in msg for msg in log_records)
+    # Look for the request logging pattern: METHOD PATH - STATUS_CODE - TIME
+    assert any("POST /api/v1/predictions/" in msg and "201" in msg for msg in log_records)
+    assert any("POST /api/v1/predictions/" in msg and "422" in msg for msg in log_records)
 
-@patch('app.main.run_prediction_flow') # Mock the core prediction logic
-def test_event_logging_for_prediction_flow(mock_run_flow, test_client, caplog):
+@patch('plugins_core.default_core.run_prediction_task') # Mock the core prediction logic
+def test_event_logging_for_prediction_flow(mock_run_task, test_client, caplog):
     """
     Test that key stages of the prediction process (e.g., processing, completed)
     are logged correctly against a prediction ID.
     """
     # Mock the background task to simulate its lifecycle
-    def mock_flow(prediction_id, db):
+    async def mock_flow(prediction_id, task_id):
         logging.info(f"Prediction {prediction_id}: Status changed to processing")
         # Simulate work
         logging.info(f"Prediction {prediction_id}: Status changed to completed")
 
-    mock_run_flow.side_effect = mock_flow
+    mock_run_task.side_effect = mock_flow
 
     # Trigger a prediction
     prediction_data = {"symbol": "TSLA", "interval": "1h", "prediction_type": "short_term"}

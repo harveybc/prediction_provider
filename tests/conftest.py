@@ -36,6 +36,12 @@ def client():
     with TestClient(app) as c:
         yield c
 
+@pytest.fixture(scope="module")
+def test_client():
+    """Alias for client fixture to match test expectations."""
+    with TestClient(app) as c:
+        yield c
+
 @pytest.fixture
 def db_session():
     """Create a database session for testing."""
