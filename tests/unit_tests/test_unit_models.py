@@ -89,6 +89,7 @@ class TestUnitModels(unittest.TestCase):
         expected_dict = {
             'id': 1,
             'task_id': 'task_123',
+            'user_id': None,
             'timestamp': '2024-01-01T12:00:00',
             'status': 'completed',
             'symbol': None,

@@ -3,8 +3,8 @@
 Database models for the Prediction Provider system using SQLAlchemy.
 """
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, JSON, ForeignKey
+from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 from typing import Optional
@@ -18,6 +18,7 @@ class Prediction(Base):
 
     id = Column(Integer, primary_key=True)
     task_id = Column(String, unique=True, nullable=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     status = Column(String, nullable=False, default='pending')
     symbol = Column(String, nullable=True)
@@ -30,11 +31,15 @@ class Prediction(Base):
     result = Column(JSON, nullable=True)
     prediction = Column(JSON, nullable=True)
     uncertainty = Column(JSON, nullable=True)
+    
+    # Relationship to User model
+    user = relationship("User", back_populates="prediction_models")
 
     def to_dict(self):
         return {
             'id': self.id,
             'task_id': self.task_id,
+            'user_id': self.user_id,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None,
             'status': self.status,
             'symbol': self.symbol,

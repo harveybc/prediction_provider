@@ -28,6 +28,7 @@ class User(Base):
     
     role = relationship("Role")
     predictions = relationship("PredictionJob", back_populates="requester")
+    prediction_models = relationship("Prediction", back_populates="user")
     api_logs = relationship("ApiLog", back_populates="user")
 
 class Role(Base):

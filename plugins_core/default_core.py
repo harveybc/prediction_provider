@@ -21,6 +21,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 import uvicorn
 import time
+from datetime import datetime, timedelta, timezone
+import re
+import html
 
 # Import database dependencies
 from app.database import get_db, Base, engine
@@ -28,7 +31,8 @@ from app.models import Prediction
 from app.database_models import User, Role, ApiLog
 from app.auth import (
     get_current_user, require_admin, require_client, require_admin_or_operator,
-    get_password_hash, generate_api_key, hash_api_key, authenticate_user
+    get_password_hash, generate_api_key, hash_api_key, authenticate_user, verify_password,
+    create_access_token
 )
 
 # Create tables
@@ -56,6 +60,13 @@ class PredictionRequest(BaseModel):
             raise ValueError(f'prediction_type must be one of {allowed_types}')
         return v
     
+    @field_validator('symbol', 'ticker')
+    @classmethod
+    def validate_ticker_symbol(cls, v):
+        if v is not None and not validate_ticker(v):
+            raise ValueError("Invalid ticker/symbol format or contains dangerous content")
+        return v
+    
     @model_validator(mode='after')
     def validate_symbol_or_ticker(self):
         """Validate that at least one symbol field is provided."""
@@ -78,6 +89,7 @@ from typing import Optional, Dict, Any
 
 class PredictionResponse(BaseModel):
     id: int
+    prediction_id: Optional[int] = None  # For backward compatibility
     status: str
     symbol: str
     interval: str
@@ -89,6 +101,10 @@ class PredictionResponse(BaseModel):
     task_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
     model_name: Optional[str] = None  # For backward compatibility
+    
+    def model_post_init(self, __context):
+        # Set prediction_id to id for backward compatibility
+        self.prediction_id = self.id
 
 # The FastAPI app instance is created here, making it accessible for tests
 app = FastAPI(
@@ -138,6 +154,7 @@ async def create_prediction(request: PredictionRequest, background_tasks: Backgr
         # Create new prediction record
         prediction = Prediction(
             task_id=str(uuid.uuid4()),
+            user_id=current_user.id,
             status="pending",
             symbol=request.get_symbol(),
             interval=request.interval,
@@ -157,6 +174,7 @@ async def create_prediction(request: PredictionRequest, background_tasks: Backgr
         
         return PredictionResponse(
             id=prediction.id,
+            prediction_id=prediction.id,
             status=prediction.status,
             symbol=prediction.symbol,
             interval=prediction.interval,
@@ -181,6 +199,7 @@ async def get_prediction(prediction_id: int, db: Session = Depends(get_db)):
     
     return PredictionResponse(
         id=prediction.id,
+        prediction_id=prediction.id,
         status=prediction.status,
         symbol=prediction.symbol,
         interval=prediction.interval,
@@ -296,9 +315,9 @@ async def predict_legacy(request: dict, background_tasks: BackgroundTasks, db: S
 
 # Add predict endpoint for integration tests
 @app.post("/api/v1/predict", response_model=PredictionResponse, status_code=201)
-async def predict_api(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def predict_api(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Create a new prediction request via the /api/v1/predict endpoint."""
-    return await create_prediction(request, background_tasks, db)
+    return await create_prediction(request, background_tasks, db, current_user)
 
 def run_prediction_task_sync(prediction_id: int, task_id: str):
     """Synchronous background task to run prediction."""
@@ -564,11 +583,32 @@ import time
 @app.post("/api/v1/auth/login")
 async def login(request: dict, db: Session = Depends(get_db)):
     """User login with username and password"""
+    # Rate limiting check
+    client_ip = request.get("client_ip", "unknown")
+    if not auth_rate_limiter.is_allowed(f"login:{client_ip}"):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
+    
     user = authenticate_user(db, request["username"], request["password"])
+    
+    # Log authentication attempt
+    log_entry = ApiLog(
+        user_id=user.id if user else None,
+        ip_address=client_ip,
+        endpoint="/api/v1/auth/login",
+        method="POST",
+        request_timestamp=datetime.now(timezone.utc),
+        response_status_code=200 if user else 401,
+        response_time_ms=10
+    )
+    db.add(log_entry)
+    
     if not user:
+        db.commit()
         raise HTTPException(status_code=401, detail="Invalid username or password")
     
     if not user.is_active:
+        log_entry.response_status_code = 401
+        db.commit()
         raise HTTPException(status_code=401, detail="User account is not active")
     
     user.last_login = datetime.now(timezone.utc)
@@ -662,9 +702,22 @@ async def list_users(db: Session = Depends(get_db), current_user: User = Depends
     ]
 
 @app.put("/api/v1/users/password")
-async def change_password(request: dict, db: Session = Depends(get_db)):
+async def change_password(request: dict, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Change user password"""
-    # For now, just return success - would need proper auth
+    old_password = request.get("old_password")
+    new_password = request.get("new_password")
+    
+    if not old_password or not new_password:
+        raise HTTPException(status_code=400, detail="Both old_password and new_password are required")
+    
+    # Verify old password
+    if not verify_password(old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Invalid old password")
+    
+    # Update password
+    current_user.hashed_password = get_password_hash(new_password)
+    db.commit()
+    
     return {"message": "Password changed successfully"}
 
 @app.get("/api/v1/admin/logs")
@@ -704,34 +757,102 @@ async def get_logs(user: Optional[str] = None, endpoint: Optional[str] = None, h
     }
 
 @app.get("/api/v1/admin/usage/{username}")
-async def get_usage_stats(username: str, days: int = 30, db: Session = Depends(get_db)):
+async def get_user_usage(username: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin_or_operator)):
     """Get usage statistics for a user (Admin/Operator only)"""
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    cutoff_time = datetime.now(timezone.utc) - timedelta(days=days)
+    # Get usage statistics
+    logs = db.query(ApiLog).filter(ApiLog.user_id == user.id).all()
+    predictions = db.query(Prediction).filter(Prediction.user_id == user.id).all()
     
-    logs = db.query(ApiLog).filter(
-        ApiLog.user_id == user.id,
-        ApiLog.request_timestamp >= cutoff_time
-    ).all()
-    
-    predictions = db.query(PredictionJob).filter(
-        PredictionJob.user_id == user.id,
-        PredictionJob.created_at >= cutoff_time
-    ).all()
-    
-    total_requests = len(logs)
-    total_predictions = len(predictions)
-    total_processing_time = sum(p.processing_time_ms or 0 for p in predictions)
-    
-    cost_per_prediction = 0.10
-    cost_estimate = total_predictions * cost_per_prediction
+    total_processing_time = sum(log.response_time_ms or 0 for log in logs)
     
     return {
-        "total_requests": total_requests,
-        "total_predictions": total_predictions,
+        "username": username,
+        "total_requests": len(logs),
+        "total_predictions": len(predictions),
         "total_processing_time_ms": total_processing_time,
-        "cost_estimate": cost_estimate
+        "cost_estimate": len(predictions) * 0.10  # $0.10 per prediction
     }
+
+def sanitize_input(value: str) -> str:
+    """Sanitize input to prevent XSS and other attacks"""
+    if not value:
+        return value
+    
+    # HTML escape
+    value = html.escape(value)
+    
+    # Remove script tags and other dangerous content
+    dangerous_patterns = [
+        r'<script[^>]*>.*?</script>',
+        r'javascript:',
+        r'vbscript:',
+        r'onload=',
+        r'onerror=',
+        r'onclick=',
+        r'onmouseover='
+    ]
+    
+    for pattern in dangerous_patterns:
+        value = re.sub(pattern, '', value, flags=re.IGNORECASE | re.DOTALL)
+    
+    return value
+
+def validate_ticker(ticker: str) -> bool:
+    """Validate ticker symbol format"""
+    if not ticker:
+        return False
+    
+    # Check for dangerous content
+    dangerous_chars = ['<', '>', '"', "'", '&', '(', ')', 'script', 'javascript']
+    for char in dangerous_chars:
+        if char.lower() in ticker.lower():
+            return False
+    
+    # Ticker should be alphanumeric with possibly a dot, dash, or underscore (for forex pairs like EUR_USD)
+    if not re.match(r'^[A-Za-z0-9._-]+$', ticker):
+        return False
+    
+    return True
+
+# Rate limiting for brute force protection
+from collections import defaultdict, deque
+import time
+
+class RateLimiter:
+    def __init__(self, max_requests: int = 5, window_seconds: int = 60):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests = defaultdict(deque)
+    
+    def is_allowed(self, key: str) -> bool:
+        now = time.time()
+        window_start = now - self.window_seconds
+        
+        # Clean old requests
+        while self.requests[key] and self.requests[key][0] < window_start:
+            self.requests[key].popleft()
+        
+        # Check if limit exceeded
+        if len(self.requests[key]) >= self.max_requests:
+            return False
+        
+        # Add current request
+        self.requests[key].append(now)
+        return True
+
+# Global rate limiter for authentication
+auth_rate_limiter = RateLimiter(max_requests=3, window_seconds=60)
+
+@app.delete("/api/v1/admin/logs/{log_id}")
+async def delete_audit_log(log_id: int, current_user: User = Depends(require_admin)):
+    """Attempt to delete audit log - not allowed for integrity"""
+    raise HTTPException(status_code=405, detail="Audit logs cannot be deleted")
+
+@app.put("/api/v1/admin/logs/{log_id}")
+async def modify_audit_log(log_id: int, request: dict, current_user: User = Depends(require_admin)):
+    """Attempt to modify audit log - not allowed for integrity"""
+    raise HTTPException(status_code=405, detail="Audit logs cannot be modified")

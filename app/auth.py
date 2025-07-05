@@ -15,8 +15,8 @@ SECRET_KEY = "your-secret-key-here"  # Should be from config
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# Password hashing - using argon2 to avoid deprecation warning
-pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
+# Password hashing - using only argon2 to avoid deprecation warning
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # Security schemes
 API_KEY_NAME = "X-API-KEY"
@@ -65,14 +65,18 @@ def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
     user = db.query(User).filter(User.hashed_api_key == hashed_key).first()
     return user
 
-async def get_api_key(api_key: str, db: Session = None) -> Optional[User]:
-    """Get user by API key - async version for testing"""
+async def get_api_key(api_key: str, db: Session = None) -> Optional[str]:
+    """Get API key validation result - async version for testing"""
     if db is None:
-        # For testing purposes, return mock user if key is "test_key"
+        # For testing purposes, return the key if it's "test_key"
         if api_key == "test_key":
-            return {"username": "test_user", "role": "client"}
+            return api_key
         return None
-    return get_user_by_api_key(db, api_key)
+    
+    user = get_user_by_api_key(db, api_key)
+    if user:
+        return api_key
+    return None
 
 async def get_current_user_from_token(token: str = Depends(security), db: Session = Depends(get_db)) -> User:
     """Get current user from JWT token"""
