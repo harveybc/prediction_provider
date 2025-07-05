@@ -1,44 +1,99 @@
 import argparse
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Predictor: A tool for timeseries prediction with plugin support.")
-    parser.add_argument('--x_train_file', type=str, help='Path to the input CSV file that is used for training the model (x_train).')
-    parser.add_argument('-ytf', '--y_train_file', type=str, help='Path to the input CSV file that is used for training the model (y_train), IMPORTANT: it is not shifted, must coincide 1 to 1|with the training data.')
-    parser.add_argument('-xvf', '--x_validation_file', type=str, help='Path to the input CSV file that is used for validation (x_validation).')
-    parser.add_argument('-yvf', '--y_validation_file', type=str, help='Path to the input CSV file that is used for validation (y_validation), IMPORTANT: it is not shifted, must coincide 1 to 1|with the validation data.')
-    parser.add_argument('-tc', '--target_column', type=str, help='If used, assumes no input_timeseries is used but the input_timeseries is a target column in the input CSV file, in all cases, each row in the input_csv must correspond with the exact tick time of the timeseries.')
-    parser.add_argument('-of', '--output_file', type=str, help='Path to the output CSV file with the prediction vlues.')
-    parser.add_argument('-rf', '--results_file', type=str, help='Path to the output CSV file with the result training and  validationstatistics.')
-    parser.add_argument('-sm', '--save_model', type=str, help='Filename to save the trained predictor model.')
-    parser.add_argument('-lm', '--load_model', type=str, help='Filename to load a trained predictor model from (does not perform training, just evaluate input data).')
-    parser.add_argument('-ef', '--evaluate_file', type=str, help='Filename for outputting loaded model evaluation results.')
-    parser.add_argument('-pl', '--plugin', type=str,  help='Name of the encoder plugin to use.')
-    parser.add_argument('-th', '--time_horizon', type=int, help='Number of ticks ahead to predict.')
-    parser.add_argument('-te', '--threshold_error', type=float, help='MSE error threshold to stop the training process.')
-    parser.add_argument('-rl', '--remote_log', type=str, help='URL of a remote API endpoint for saving debug variables in JSON format.')
-    parser.add_argument('-rlc', '--remote_load_config', type=str, help='URL of a remote JSON configuration file to download and execute.')
-    parser.add_argument('-rsc', '--remote_save_config', type=str, help='URL of a remote API endpoint for saving configuration in JSON format.')
-    parser.add_argument('-u', '--username', type=str, help='Username for the API endpoint.')
-    parser.add_argument('-p', '--password', type=str, help='Password for Username for the API endpoint.')
-    parser.add_argument('-lc', '--load_config', type=str, help='Path to load a configuration file.')
-    parser.add_argument('-sc', '--save_config', type=str, help='Path to save the current configuration.')
-    parser.add_argument('-sl', '--save_log', type=str, help='Path to save the current debug info.')
-    parser.add_argument('-qm', '--quiet_mode', action='store_true', help='Suppress output messages.')
-    parser.add_argument('-fd', '--force_date', action='store_true', help='Include date in the output CSV files.')
-    parser.add_argument('-hdr', '--headers', action='store_true', help='Indicate if the CSV file has headers.')
-    parser.add_argument('-io', '--input_offset', type=int,help='Offset for input data to account for feature extraction window size.')
-    parser.add_argument('-mstr', '--max_steps_train', type=int,help='Offset for input data to account for feature extraction window size.')
-    parser.add_argument('-mste', '--max_steps_test', type=int,help='Offset for input data to account for feature extraction window size.')
-    parser.add_argument('-it', '--iterations', type=int,help='number of times the whole process is made and after that the training and validation MAE are averaged and also the std dev, max and min is shown.')
-    parser.add_argument('-e', '--epochs', type=int,help='number of epochs for the plugin model training.')
-    parser.add_argument('-ud', '--use_daily', action='store_true',help='isntead of predicting the next time_horizon hours, predict the next time_horizon days.')
-    # the predicted_hrizons parameter is a list of integers, each integer is a number of hours to predict
-    parser.add_argument('-ph', '--predicted_hrizons', type=int, nargs='*', help='list of predicted hrizons to predict.')
-    # "feature_extractor_file": "examples/results/phase_3_2_daily/phase_3_2_cnn_25200_1d_encoder_model.h5.keras",
-    # "train_fe" : false
-    parser.add_argument('--feature_extractor_file', type=str, help='Path to the feature extractor file.')
-    parser.add_argument('--train_fe', action='store_true', help='Train the feature extractor.')
-
-
-
+    parser = argparse.ArgumentParser(description="Prediction Provider: A plugin-based system for financial time series predictions.")
+    
+    # Core Service Configuration
+    parser.add_argument('--host', type=str, help='Server host address')
+    parser.add_argument('--port', type=int, help='Server port number')
+    parser.add_argument('--core_plugin', type=str, help='Core plugin to use')
+    parser.add_argument('--reload', action='store_true', help='Auto-reload on code changes')
+    parser.add_argument('--workers', type=int, help='Number of worker processes')
+    
+    # Database Configuration  
+    parser.add_argument('--database_url', type=str, help='Database connection string')
+    parser.add_argument('--database_echo', action='store_true', help='Enable SQL logging')
+    parser.add_argument('--database_pool_size', type=int, help='Database connection pool size')
+    parser.add_argument('--database_max_overflow', type=int, help='Maximum overflow connections')
+    
+    # Security Configuration
+    parser.add_argument('--secret_key', type=str, help='JWT secret key')
+    parser.add_argument('--algorithm', type=str, help='JWT algorithm')
+    parser.add_argument('--access_token_expire_minutes', type=int, help='Access token expiration in minutes')
+    parser.add_argument('--api_key_expire_days', type=int, help='API key expiration in days')
+    parser.add_argument('--require_activation', action='store_true', help='Require user activation')
+    
+    # Plugin Configuration
+    parser.add_argument('--feeder_plugin', type=str, help='Data feeder plugin')
+    parser.add_argument('--predictor_plugin', type=str, help='Prediction model plugin')
+    parser.add_argument('--pipeline_plugin', type=str, help='Processing pipeline plugin')
+    parser.add_argument('--endpoints_plugin', type=str, help='API endpoints plugin')
+    
+    # Endpoints Plugin Configuration
+    parser.add_argument('--endpoints_host', type=str, help='Endpoints host address')
+    parser.add_argument('--endpoints_port', type=int, help='Endpoints port number')
+    parser.add_argument('--endpoints_debug', action='store_true', help='Enable endpoints debug mode')
+    parser.add_argument('--endpoints_db_path', type=str, help='Endpoints database path')
+    
+    # Prediction Parameters
+    parser.add_argument('--instrument', type=str, help='Financial instrument symbol')
+    parser.add_argument('--correlated_instruments', type=str, nargs='*', help='List of correlated instruments')
+    parser.add_argument('--target_column', type=str, help='Target column for prediction')
+    parser.add_argument('--prediction_horizon', type=int, help='Number of periods to predict')
+    parser.add_argument('--prediction_timeout', type=int, help='Prediction timeout in seconds')
+    parser.add_argument('--max_concurrent_predictions', type=int, help='Maximum concurrent predictions')
+    parser.add_argument('--prediction_history_days', type=int, help='Days to keep prediction history')
+    parser.add_argument('--prediction_interval', type=int, help='Prediction interval in seconds')
+    parser.add_argument('--prediction_confidence_level', type=float, help='Confidence level for predictions')
+    parser.add_argument('--prediction_target_column', type=str, help='Target column for prediction output')
+    
+    # Model Configuration
+    parser.add_argument('--model_path', type=str, help='Path to trained model file')
+    parser.add_argument('--normalization_params_path', type=str, help='Path to normalization parameters file')
+    parser.add_argument('--model_type', type=str, help='Type of model')
+    parser.add_argument('--model_cache_size', type=int, help='Number of models to cache')
+    
+    # Processing Configuration
+    parser.add_argument('--n_batches', type=int, help='Number of processing batches')
+    parser.add_argument('--batch_size', type=int, help='Size of each batch')
+    parser.add_argument('--window_size', type=int, help='Size of sliding window')
+    parser.add_argument('--mc_samples', type=int, help='Monte Carlo samples for uncertainty estimation')
+    parser.add_argument('--use_normalization_json', type=str, help='Path to normalization JSON file')
+    
+    # Performance Options
+    parser.add_argument('--use_gpu', action='store_true', help='Enable GPU acceleration')
+    parser.add_argument('--gpu_memory_limit', type=int, help='GPU memory limit in MB')
+    parser.add_argument('--enable_mixed_precision', action='store_true', help='Use mixed precision training')
+    
+    # Pipeline Configuration
+    parser.add_argument('--pipeline_enabled', action='store_true', help='Enable pipeline processing')
+    parser.add_argument('--pipeline_db_path', type=str, help='Pipeline database path')
+    
+    # Logging & Monitoring
+    parser.add_argument('--enable_logging', action='store_true', help='Enable system logging')
+    parser.add_argument('--log_level', type=str, help='Logging level (DEBUG, INFO, WARNING, ERROR)')
+    
+    # User Management
+    parser.add_argument('--create_user', type=str, help='Create new user with username')
+    parser.add_argument('--username', type=str, help='Username for user operations')
+    parser.add_argument('--email', type=str, help='Email for user creation')
+    parser.add_argument('--role', type=str, help='User role (client, admin, operator)')
+    parser.add_argument('--activate_user', type=str, help='Activate user by username')
+    parser.add_argument('--change_password', action='store_true', help='Change user password')
+    parser.add_argument('--old_password', type=str, help='Old password for password change')
+    parser.add_argument('--new_password', type=str, help='New password for password change')
+    
+    # File I/O
+    parser.add_argument('--load_config', type=str, help='Load configuration from JSON file')
+    parser.add_argument('--save_config', type=str, help='Save current configuration to file')
+    parser.add_argument('--output_file', type=str, help='Path for prediction output CSV')
+    parser.add_argument('--results_file', type=str, help='Path for training/validation statistics CSV')
+    
+    # Authentication Parameters
+    parser.add_argument('--password', type=str, help='Password for API authentication')
+    parser.add_argument('--remote_load_config', type=str, help='URL to download remote JSON configuration')
+    parser.add_argument('--remote_save_config', type=str, help='URL to save configuration remotely')
+    parser.add_argument('--remote_log', type=str, help='URL for remote logging endpoint')
+    parser.add_argument('--save_log', type=str, help='Path to save log files')
+    
     return parser.parse_known_args()

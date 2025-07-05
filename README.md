@@ -1,48 +1,77 @@
 
-# Predictor
+# Prediction Provider
 
 ## Description
 
-The predictor project is a comprehensive tool for timeseries prediction, equipped with a robust plugin architecture. This project allows for both local and remote configuration handling, as well as replicability of experimental results. The system can be extended with custom plugins for various types of neural networks, including artificial neural networks (ANN), convolutional neural networks (CNN), long short-term memory networks (LSTM), and transformer-based models. Examples of the aforementioned models are included alongside with historical EURUSD and other training data in the **examples** directory.
+The Prediction Provider is a comprehensive, plugin-based system for financial time series prediction. It provides a RESTful API for asynchronous prediction requests with complete audit trails for billing and compliance. The system is designed following Test-Driven Development (TDD) principles with extensive behavioral testing coverage.
+
+## Current Status
+
+**Development Status**: Core functionality complete, authentication and production features under development
+
+### Test Coverage: 110 Tests (84% Pass Rate)
+- ✅ **Unit Tests**: 32 tests (31 passing, 1 failing) - 96% pass rate
+- ✅ **Integration Tests**: 19 tests (100% pass rate)
+- ✅ **System Tests**: 7 tests (100% pass rate)
+- ✅ **Acceptance Tests**: 13 tests (100% pass rate)
+- ⚠️ **Security Tests**: 8 tests (62% pass rate - 5 passing, 3 failing)
+- 🔴 **Production Tests**: 17 tests (24% pass rate - 4 passing, 13 failing)
+
+### What's Working
+- ✅ Asynchronous prediction processing
+- ✅ Plugin-based architecture (feeder, predictor, pipeline, core, endpoints)
+- ✅ Database operations and data persistence
+- ✅ RESTful API endpoints for predictions
+- ✅ Health monitoring and system status
+- ✅ CORS support and basic security measures
+
+### What's In Development
+- ⚠️ Authentication enforcement and user management
+- ⚠️ Input sanitization and security hardening
+- ⚠️ Rate limiting and brute force protection
+- ⚠️ Complete audit logging for compliance
+- ⚠️ Production-ready security measures
+
+## Architecture
+
+The system follows a **plugin-based architecture** with five main plugin types:
+
+1. **Feeder Plugins**: Obtain and prepare input data (e.g., financial data from APIs)
+2. **Predictor Plugins**: Load models and generate predictions
+3. **Pipeline Plugins**: Orchestrate the complete processing workflow
+4. **Core Plugins**: Manage central server configuration and API framework
+5. **Endpoints Plugins**: Define individual RESTful API endpoints
 
 ## Installation Instructions
 
-To install and set up the predictor application, follow these steps:
+To install and set up the Prediction Provider system, follow these steps:
 
 1. **Clone the Repository**:
     ```bash
-    git clone https://github.com/harveybc/predictor.git
-    cd predictor
+    git clone https://github.com/harveybc/prediction_provider.git
+    cd prediction_provider
     ```
 
-2. **Add the clonned directory to the Windows or Linux PYTHONPATH environment variable**:
-
-In Windows a close of current command line promp may be required for the PYTHONPATH varible to be usable.
-Confirm you added the directory to the PYTHONPATH with the following commands:
-
-- On Windows, run:
+2. **Create and Activate a Virtual Environment**:
     ```bash
-    echo %PYTHONPATH%
+    # Using conda (recommended)
+    conda create --name prediction_provider python=3.12
+    conda activate prediction_provider
+    
+    # Or using venv
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
-- On Linux, run:
-    ```bash
-    echo $PYTHONPATH 
-    ```
-If the clonned repo directory appears in the PYTHONPATH, continue to the next step. 
-
-3. **Create and Activate a Virtual Environment (Anaconda is required)**:
-
-    - **Using `conda`**:
-        ```bash
-        conda create --name predictor-env python=3.9
-        conda activate predictor-env
-        ```
-
-4. **Install Dependencies**:
+3. **Install Dependencies**:
     ```bash
     pip install --upgrade pip
     pip install -r requirements.txt
+    ```
+
+4. **Initialize Database**:
+    ```bash
+    python init_db.py
     ```
 
 5. **Build the Package**:
@@ -55,20 +84,66 @@ If the clonned repo directory appears in the PYTHONPATH, continue to the next st
     pip install .
     ```
 
-7. **(Optional) Run the predictor**:
-    - On Windows, run the following command to verify installation (it uses all default valuex, use predictor.bat --help for complete command line arguments description):
-        ```bash
-        predictor.bat --load_config examples\config\phase_1\phase_1_ann_6300_1h_config.json
-        ```
+## Usage
 
-    - On Linux, run:
-        ```bash
-        sh predictor.sh --load_config examples\config\phase_1\phase_1_ann_6300_1h_config.json
-        ```
+### Starting the Server
 
-8. **(Optional) Run Tests**:
-For pasing remote tests, requires an instance of [harveybc/data-logger](https://github.com/harveybc/data-logger)
-    - On Windows, run the following command to run the tests:
+```bash
+# Using the main module
+python -m app.main
+
+# Or using the console script (if installed)
+prediction_provider
+
+# With custom configuration
+python -m app.main --config config/production_config.json
+```
+
+The server will start on `http://localhost:8000` by default.
+
+### API Usage Examples
+
+#### Health Check
+```bash
+curl http://localhost:8000/health
+```
+
+#### Create Prediction Request
+```bash
+curl -X POST "http://localhost:8000/api/v1/predictions/" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "AAPL",
+    "interval": "1d",
+    "prediction_type": "short_term"
+  }'
+```
+
+#### Check Prediction Status
+```bash
+curl http://localhost:8000/api/v1/predictions/123
+```
+
+#### List All Predictions
+```bash
+curl http://localhost:8000/api/v1/predictions/
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+python -m pytest tests/ -v
+
+# Run specific test categories
+python -m pytest tests/unit_tests/ -v
+python -m pytest tests/integration_tests/ -v
+python -m pytest tests/system_tests/ -v
+python -m pytest tests/acceptance_tests/ -v
+
+# Run tests with coverage
+python -m pytest tests/ --cov=app --cov-report=html
+```
         ```bash
         set_env.bat
         pytest

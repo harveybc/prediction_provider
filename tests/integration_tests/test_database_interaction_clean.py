@@ -72,6 +72,8 @@ class TestDatabaseInteraction:
         # Create test user
         test_user = User(
             username="test_user",
+            email="test_user@example.com",
+            hashed_password="test_password_hash",
             hashed_api_key="test_key_hash",
             is_active=True,
             role_id=test_role.id
@@ -83,6 +85,8 @@ class TestDatabaseInteraction:
         test_prediction = PredictionJob(
             id="test_task_123",
             user_id=test_user.id,
+            ticker="AAPL",
+            model_name="default_model",
             status="pending",
             request_payload={"ticker": "AAPL"}
         )

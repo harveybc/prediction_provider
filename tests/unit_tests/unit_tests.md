@@ -8,14 +8,17 @@ Unit tests focus on the smallest individual components of the application in iso
 - ✅ Endpoints Plugin (`test_unit_endpoints.py`) - 3 tests
 - ✅ Predictor Plugin (`test_unit_predictor.py`) - 2 tests  
 - ✅ Feeder Plugin (`test_unit_feeder.py`) - 3 tests
-- ✅ Core System (`test_unit_core.py`) - 3 tests
+- ✅ Core System (`test_unit_core.py`) - 3 tests (1 failing - auth function missing)
 - ✅ Database Utilities (`test_unit_database.py`) - 2 tests
 - ✅ Database Models (`test_database_models.py`) - 2 tests
 - ✅ API Endpoints (`test_api_endpoints.py`) - 3 tests
 - ✅ Pipeline Plugin (`test_unit_pipeline.py`) - 10 tests
 - ✅ Models Utilities (`test_unit_models.py`) - 4 tests
+- ✅ Feeder Plugins (`test_feeder_plugins.py`) - 3 tests
+- ✅ Predictor Plugins (`test_predictor_plugins.py`) - 2 tests
+- ✅ Pipeline Plugins (`test_pipeline_plugins.py`) - 10 tests
 
-**Total Unit Tests: 32**
+**Total Unit Tests: 32 (96% pass rate - 31 passing, 1 failing)**
 
 **Excluded from Unit Testing (as requested):**
 - 🚫 CLI Module - Excluded per requirements

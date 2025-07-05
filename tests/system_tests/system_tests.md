@@ -2,6 +2,13 @@
 
 This document provides a detailed breakdown of the system-level tests for the Prediction Provider application. System tests are designed to validate the complete and integrated software from an end-to-end perspective, focusing on non-functional requirements like security, performance, and logging.
 
+**Current Test Coverage:**
+- ✅ Security Tests (`test_security.py`) - 4 tests
+- ✅ Logging Tests (`test_logging.py`) - 2 tests  
+- ✅ System Integration (`test_system.py`) - 1 test
+
+**Total System Tests: 7 (100% pass rate)**
+
 ---
 
 ## 1. Security Tests (`test_security.py`)

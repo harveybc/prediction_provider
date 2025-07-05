@@ -7,6 +7,21 @@ DEFAULT_VALUES = {
     "core_plugin": "default_core",
     "host": "127.0.0.1",
     "port": 8000,
+    "reload": False,
+    "workers": 1,
+    
+    # --- Database Configuration ---
+    "database_url": "sqlite:///predictions.db",
+    "database_echo": False,
+    "database_pool_size": 10,
+    "database_max_overflow": 20,
+    
+    # --- Security Configuration ---
+    "secret_key": "your-secret-key-here",
+    "algorithm": "HS256",
+    "access_token_expire_minutes": 30,
+    "api_key_expire_days": 90,
+    "require_activation": True,
     
     # --- Endpoints Plugin Configuration ---
     "endpoints_plugin": "default_endpoints",
@@ -31,13 +46,16 @@ DEFAULT_VALUES = {
     "normalization_params_path": None,
     "model_type": "keras",
     "prediction_horizon": 6,
+    "prediction_timeout": 300,
+    "max_concurrent_predictions": 10,
+    "prediction_history_days": 30,
+    "prediction_confidence_level": 0.95,
+    "prediction_target_column": "close_price",
     "mc_samples": 100,
     "use_gpu": True,
     "gpu_memory_limit": None,
     "enable_mixed_precision": False,
     "model_cache_size": 5,
-    "prediction_confidence_level": 0.95,
-    "prediction_target_column": "close_price",
     
     # --- Pipeline Plugin Configuration ---
     "pipeline_plugin": "default_pipeline",
@@ -47,8 +65,28 @@ DEFAULT_VALUES = {
     "enable_logging": True,
     "log_level": "INFO",
     
-    # --- Database Configuration ---
-    "database_url": "sqlite:///predictions.db",
+    # --- User Management ---
+    "create_user": None,
+    "username": None,
+    "email": None,
+    "role": "client",
+    "activate_user": None,
+    "change_password": False,
+    "old_password": None,
+    "new_password": None,
+    
+    # --- File I/O ---
+    "load_config": None,
+    "save_config": None,
+    "output_file": None,
+    "results_file": None,
+    
+    # --- Authentication ---
+    "password": None,
+    "remote_load_config": None,
+    "remote_save_config": None,
+    "remote_log": None,
+    "save_log": None,
     
     # --- Legacy Plugin Names (for plugin loading) ---
     "endpoint_plugins": ["predict_endpoint"],

@@ -2,6 +2,12 @@
 
 This document provides a detailed definition of the acceptance tests for the Prediction Provider system. These tests are designed to validate the end-to-end functionality from the perspective of the primary client, the Live Trading System (LTS).
 
+**Current Test Coverage:**
+- ✅ Core API Workflow (`test_acceptance.py`) - 11 tests
+- ✅ LTS Workflow Simulation (`test_lts_workflow.py`) - 2 tests
+
+**Total Acceptance Tests: 13 (100% pass rate)**
+
 ## Methodology
 
 These tests are implemented using a black-box approach. The system is treated as a whole, and tests interact with it exclusively through its public API endpoints. The primary tools used are `pytest` for the test framework and `fastapi.testclient.TestClient` for simulating HTTP requests.

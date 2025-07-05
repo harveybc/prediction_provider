@@ -27,3 +27,13 @@ pyjwt
 psutil
 requests
 yfinance
+bcrypt
+argon2-cffi
+fastapi
+uvicorn[standard]
+python-multipart
+pytest-asyncio
+pytest-cov
+httpx
+passlib[bcrypt]
+python-jose[cryptography]
