@@ -5,9 +5,9 @@ from unittest.mock import patch, MagicMock
 from app.main import app
 from app.database_models import User, Role, ApiLog
 from app.database import get_db
+from app.auth import get_password_hash
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-import bcrypt
 import time
 
 # Test client setup

@@ -592,6 +592,7 @@ async def login(request: dict, db: Session = Depends(get_db)):
     
     # Log authentication attempt
     log_entry = ApiLog(
+        request_id=str(uuid.uuid4()),
         user_id=user.id if user else None,
         ip_address=client_ip,
         endpoint="/api/v1/auth/login",
