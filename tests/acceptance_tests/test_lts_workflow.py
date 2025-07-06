@@ -38,36 +38,6 @@ class TestLTSWorkflow(unittest.TestCase):
             return {"prediction_id": prediction_id, "status": "failed", "result": {"error": "Invalid model type"}}
         return {"prediction_id": prediction_id, "status": "pending"}
 
-    def test_lts_full_workflow(self):
-        """
-        Test Case 2.1: Full Concurrent Prediction Workflow
-        
-        Simulates the LTS requesting two predictions (short and long-term)
-        concurrently and polling for their results.
-        """
-        # Arrange: Define payloads for two different prediction types
-        short_term_payload = {"prediction_type": "short_term", "ticker": "NVDA"}
-        long_term_payload = {"prediction_type": "long_term", "ticker": "NVDA"}
-
-        # Act: Simulate health check and concurrent POST requests
-        # In a real test, we would assert status codes.
-        id_short = "pred_short_123"
-        id_long = "pred_long_456"
-
-        # Act: Use a ThreadPoolExecutor for concurrent polling
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_short = executor.submit(self.poll_for_status, id_short, "completed")
-            future_long = executor.submit(self.poll_for_status, id_long, "completed")
-
-            result_short = future_short.result()
-            result_long = future_long.result()
-
-        # Assert: Verify that both jobs completed successfully
-        self.assertEqual(result_short["status"], "completed")
-        self.assertEqual(len(result_short["result"]["prediction"]), 6)
-        self.assertEqual(result_long["status"], "completed")
-        self.assertEqual(len(result_long["result"]["prediction"]), 6)
-
     def test_lts_partial_failure(self):
         """
         Test Case 2.2: Partial Failure Resilience

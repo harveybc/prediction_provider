@@ -1,4 +1,3 @@
-
 # Prediction Provider
 
 ## Description
@@ -285,3 +284,31 @@ graph TD
     style NoteM,NoteK,NoteNoFB fill:#8B413,stroke:#333,stroke-dasharray:5 5,color:#fff;
 
 ```
+
+### Test Strategy: Behavioral vs Implementation Testing
+
+This project implements a dual testing strategy:
+
+#### 🎯 **Behavioral Tests** (Recommended for CI/CD)
+- **Location**: `tests/behavioral_tests/`
+- **Focus**: User journeys and business outcomes
+- **Stability**: High - resilient to implementation changes
+- **Examples**: User onboarding, data isolation, access control
+
+```bash
+# Run behavioral tests (stable across code changes)
+SKIP_BACKGROUND_TASKS=true SKIP_RATE_LIMITING=true python -m pytest tests/behavioral_tests/ -v
+```
+
+#### ⚙️ **Implementation Tests** (For detailed debugging)
+- **Location**: `tests/production_tests/`, `tests/security_tests/`, etc.
+- **Focus**: Specific API contracts and implementation details
+- **Stability**: Lower - may need updates when implementation changes
+- **Use Case**: Detailed debugging and implementation validation
+
+```bash
+# Run implementation tests (may need updates after code changes)
+SKIP_BACKGROUND_TASKS=true SKIP_RATE_LIMITING=true python -m pytest tests/production_tests/ -v
+```
+
+See `BEHAVIORAL_TESTING_GUIDE.md` for detailed guidance on test design principles.

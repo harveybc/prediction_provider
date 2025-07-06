@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
+
 import pytest
 from unittest.mock import patch, MagicMock
 import pandas as pd

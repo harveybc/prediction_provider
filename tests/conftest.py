@@ -3,6 +3,8 @@ import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="multipart")
 warnings.filterwarnings("ignore", category=PendingDeprecationWarning, message="Please use `import python_multipart` instead.")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="pkg_resources")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message="pkg_resources is deprecated as an API.*")
 
 import sys
 import os

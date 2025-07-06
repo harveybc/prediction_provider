@@ -2,9 +2,9 @@
 import pytest
 import asyncio
 from fastapi.testclient import TestClient
-from app.main import app
+from plugins_core.default_core import app
 from app.database import get_db, Base, engine
-from app.models import Prediction
+from app.database_models import PredictionJob
 import time
 
 # Use a separate test database
