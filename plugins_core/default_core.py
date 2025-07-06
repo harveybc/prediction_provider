@@ -1058,7 +1058,8 @@ async def get_logs(user: Optional[str] = None, endpoint: Optional[str] = None, h
                 "method": log.method,
                 "request_timestamp": log.request_timestamp,
                 "response_status_code": log.response_status_code,
-                "response_time_ms": log.response_time_ms
+                "response_time_ms": log.response_time_ms,
+                "request_payload": log.request_payload
             }
             for log in logs
         ],
