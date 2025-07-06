@@ -1,10 +1,12 @@
+import warnings
+# Suppress warnings before any other imports
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="multipart")
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning, message="Please use `import python_multipart` instead.")
+
 import sys
 import os
 import multiprocessing
-import warnings
-
-# Suppress multiprocessing warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="multiprocessing")
 
 # Set multiprocessing start method to avoid fork issues
 if multiprocessing.get_start_method(allow_none=True) is None:
