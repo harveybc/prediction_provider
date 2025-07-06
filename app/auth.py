@@ -1,7 +1,7 @@
 from fastapi import Security, HTTPException, status, Depends
 from fastapi.security import APIKeyHeader, HTTPBearer
 from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from typing import Optional
@@ -15,21 +15,19 @@ SECRET_KEY = "your-secret-key-here"  # Should be from config
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# Password hashing - using only argon2 to avoid deprecation warning
-pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
-
 # Security schemes
 API_KEY_NAME = "X-API-KEY"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 security = HTTPBearer(auto_error=False)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a password against its hash using bcrypt"""
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def get_password_hash(password: str) -> str:
-    """Hash a password"""
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt"""
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password.encode('utf-8'), salt).decode('utf-8')
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     """Create a JWT access token"""
@@ -61,8 +59,9 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
 
 def get_user_by_api_key(db: Session, api_key: str) -> Optional[User]:
     """Get user by API key"""
+    from sqlalchemy.orm import joinedload
     hashed_key = hash_api_key(api_key)
-    user = db.query(User).filter(User.hashed_api_key == hashed_key).first()
+    user = db.query(User).options(joinedload(User.role)).filter(User.hashed_api_key == hashed_key).first()
     return user
 
 async def get_api_key(api_key: str, db: Session = None) -> Optional[str]:

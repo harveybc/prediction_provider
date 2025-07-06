@@ -61,7 +61,7 @@ class TestUserManagement:
     def test_password_change_security(self):
         """Test secure password change workflow"""
         # Create and activate user
-        self._create_test_user("pwduser", "client")
+        user_api_key = self._create_test_user("pwduser", "client")
         
         # User changes password
         response = client.put(
@@ -70,7 +70,7 @@ class TestUserManagement:
                 "old_password": "password",
                 "new_password": "new_secure_password123!"
             },
-            headers={"X-API-KEY": "user_key"}
+            headers={"X-API-KEY": user_api_key}
         )
         assert response.status_code == 200
         
@@ -148,7 +148,7 @@ class TestUserManagement:
     def _create_test_user(self, username, role):
         """Helper to create and activate test user"""
         # Create user
-        client.post(
+        response = client.post(
             "/api/v1/admin/users",
             json={
                 "username": username,
@@ -158,11 +158,17 @@ class TestUserManagement:
             headers={"X-API-KEY": "admin_key"}
         )
         
+        # Get the API key from the response
+        user_data = response.json()
+        api_key = user_data["api_key"]
+        
         # Activate user
         client.post(
             f"/api/v1/admin/users/{username}/activate",
             headers={"X-API-KEY": "admin_key"}
         )
+        
+        return api_key
 
 
 class TestAuditLogging:
@@ -278,7 +284,7 @@ class TestAuditLogging:
     
     def _create_test_user(self, username, role):
         """Helper to create and activate test user"""
-        client.post(
+        response = client.post(
             "/api/v1/admin/users",
             json={
                 "username": username,
@@ -288,10 +294,15 @@ class TestAuditLogging:
             headers={"X-API-KEY": "admin_key"}
         )
         
+        user_data = response.json()
+        api_key = user_data["api_key"]
+        
         client.post(
             f"/api/v1/admin/users/{username}/activate",
             headers={"X-API-KEY": "admin_key"}
         )
+        
+        return api_key
 
 
 class TestPerformanceScalability:

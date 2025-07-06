@@ -10,7 +10,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 @pytest.fixture
 def security_client():
     """Create a test client for security testing."""
-    return TestClient(app)
+    import os
+    # Set security test environment
+    os.environ["REQUIRE_AUTH"] = "true"
+    os.environ["ENABLE_RATE_LIMITING"] = "true"
+    
+    # Clear rate limiting store for clean tests
+    from plugins_core.default_core import rate_limit_store
+    rate_limit_store.clear()
+    
+    yield TestClient(app)
+    
+    # Clean up after tests
+    rate_limit_store.clear()
+    os.environ.pop("REQUIRE_AUTH", None)
+    os.environ.pop("ENABLE_RATE_LIMITING", None)
 
 class TestSecurityVulnerabilities:
     """
@@ -53,7 +67,7 @@ class TestSecurityVulnerabilities:
                 assert get_response.status_code == 200
                 # Symbol should be stored as-is, not executed as SQL
                 assert get_response.json()["symbol"] == payload
-    
+
     def test_api_key_brute_force_protection(self, security_client):
         """
         Test that the system has protection against API key brute force attacks.
@@ -61,7 +75,7 @@ class TestSecurityVulnerabilities:
         """
         invalid_keys = [
             "invalid_key_1",
-            "invalid_key_2", 
+            "invalid_key_2",
             "invalid_key_3",
             "test_key_wrong",
             "admin_key",

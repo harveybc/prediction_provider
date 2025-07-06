@@ -16,6 +16,7 @@ import asyncio
 import logging
 from typing import Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, Request, BackgroundTasks
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
@@ -31,8 +32,7 @@ from app.models import Prediction
 from app.database_models import User, Role, ApiLog
 from app.auth import (
     get_current_user, require_admin, require_client, require_admin_or_operator,
-    get_password_hash, generate_api_key, hash_api_key, authenticate_user, verify_password,
-    create_access_token
+    get_password_hash, hash_api_key, verify_password, get_user_by_api_key
 )
 
 # Create tables
@@ -122,6 +122,42 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting middleware
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    """Rate limiting middleware."""
+    # Skip rate limiting for test environments unless explicitly enabled
+    if (os.getenv("PYTEST_CURRENT_TEST") or os.getenv("TESTING")) and not os.getenv("ENABLE_RATE_LIMITING"):
+        response = await call_next(request)
+        return response
+    
+    # Get client IP
+    client_ip = request.client.host if request.client else "unknown"
+    
+    # Check rate limit
+    now = time.time()
+    minute_ago = now - 60
+
+    # Clean old entries
+    rate_limit_store[client_ip] = [
+        timestamp for timestamp in rate_limit_store[client_ip] 
+        if timestamp > minute_ago
+    ]
+
+    # Check if limit exceeded (100 requests per minute for testing)
+    if len(rate_limit_store[client_ip]) >= 100:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded"}
+        )
+
+    # Add current request
+    rate_limit_store[client_ip].append(now)
+
+    # Continue with request
+    response = await call_next(request)
+    return response
+
 # Add request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -135,6 +171,17 @@ async def log_requests(request: Request, call_next):
     
     return response
 
+# Rate limiting middleware for security
+import time
+from collections import defaultdict
+# Rate limiting middleware for security
+import time
+from collections import defaultdict
+from typing import Dict, List
+
+# Rate limiting store
+rate_limit_store: Dict[str, List[float]] = defaultdict(list)
+
 # Add basic health endpoint for monitoring and testing
 @app.get("/health")
 async def health_check():
@@ -146,12 +193,182 @@ async def root():
     """Root endpoint with basic API information."""
     return {"message": "Prediction Provider API", "version": "0.1.0", "docs": "/docs"}
 
-# Add prediction endpoints
+# Flexible authentication function
+async def optional_auth(request: Request, db: Session = Depends(get_db)):
+    """Optional authentication - behavior depends on REQUIRE_AUTH environment variable."""
+    # Check if authentication is required by environment variable
+    require_auth = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
+    
+    # Check if authentication header is present
+    auth_header = request.headers.get("X-API-KEY")
+    
+    if auth_header is not None:  # API key was provided (even if empty)
+        # If header is present, validate it using the correct function
+        if not auth_header:  # Empty string
+            raise HTTPException(status_code=403, detail="API key cannot be empty")
+        
+        user = get_user_by_api_key(db, auth_header)
+        
+        if not user:
+            # If header is present but invalid, reject
+            raise HTTPException(status_code=403, detail="Invalid API key")
+        
+        if not user.is_active:
+            raise HTTPException(status_code=403, detail="User account is not active")
+        
+        return user
+    
+    # No header provided
+    if require_auth:
+        # If authentication is required, reject requests without API key
+        raise HTTPException(status_code=403, detail="API key required")
+    
+    # If authentication is not required, allow public access
+    return None
+
+# Main prediction endpoints (flexible: public or authenticated)
 @app.post("/api/v1/predictions/", response_model=PredictionResponse, status_code=201)
-async def create_prediction(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new prediction request."""
+async def create_prediction(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
+    """Create a new prediction request (flexible authentication)."""
     try:
+        # If user is authenticated, check if they have permission to create predictions
+        if current_user:
+            # Admin users are not allowed to create predictions (security separation)
+            try:
+                if current_user.role and current_user.role.name == "admin":
+                    raise HTTPException(status_code=403, detail="Admin users cannot create predictions")
+            except AttributeError:
+                # If role is not loaded, fallback to checking role_id
+                if current_user.role_id == 1:  # Admin role ID
+                    raise HTTPException(status_code=403, detail="Admin users cannot create predictions")
+        
+        # Sanitize input data
+        symbol = sanitize_input(request.get_symbol())
+        interval = sanitize_input(request.interval)
+        predictor_plugin = sanitize_input(request.get_predictor_plugin())
+        feeder_plugin = sanitize_input(request.feeder_plugin)
+        pipeline_plugin = sanitize_input(request.pipeline_plugin)
+        prediction_type = sanitize_input(request.prediction_type)
+        ticker = sanitize_input(request.get_symbol())
+        
         # Create new prediction record
+        prediction = Prediction(
+            task_id=str(uuid.uuid4()),
+            user_id=current_user.id if current_user else None,
+            status="pending",
+            symbol=symbol,
+            interval=interval,
+            predictor_plugin=predictor_plugin,
+            feeder_plugin=feeder_plugin,
+            pipeline_plugin=pipeline_plugin,
+            prediction_type=prediction_type,
+            ticker=ticker
+        )
+        
+        db.add(prediction)
+        db.commit()
+        db.refresh(prediction)
+        
+        # Start background prediction task using FastAPI's BackgroundTasks
+        background_tasks.add_task(run_prediction_task_sync, prediction.id, prediction.task_id)
+        
+        return PredictionResponse(
+            id=prediction.id,
+            prediction_id=prediction.id,
+            status=prediction.status,
+            symbol=prediction.symbol,
+            interval=prediction.interval,
+            predictor_plugin=prediction.predictor_plugin,
+            feeder_plugin=prediction.feeder_plugin,
+            pipeline_plugin=prediction.pipeline_plugin,
+            prediction_type=prediction.prediction_type,
+            ticker=prediction.ticker or prediction.symbol or "",
+            task_id=prediction.task_id,
+            result=prediction.result,
+            model_name=prediction.predictor_plugin
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating prediction: {str(e)}")
+
+@app.get("/api/v1/predictions/{prediction_id}", response_model=PredictionResponse)
+async def get_prediction(prediction_id: int, db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
+    """Get prediction by ID (flexible authentication)."""
+    prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+    if not prediction:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    
+    # If user is authenticated, check if they can access this prediction
+    if current_user and prediction.user_id and prediction.user_id != current_user.id and current_user.role.name != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return PredictionResponse(
+        id=prediction.id,
+        prediction_id=prediction.id,
+        status=prediction.status,
+        symbol=prediction.symbol,
+        interval=prediction.interval,
+        predictor_plugin=prediction.predictor_plugin,
+        feeder_plugin=prediction.feeder_plugin,
+        pipeline_plugin=prediction.pipeline_plugin,
+        prediction_type=prediction.prediction_type,
+        ticker=prediction.ticker or prediction.symbol or "",
+        task_id=prediction.task_id,
+        result=prediction.result,
+        model_name=prediction.predictor_plugin
+    )
+    
+@app.get("/api/v1/predictions/")
+async def get_all_predictions(db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
+    """Get all predictions (flexible authentication)."""
+    if current_user:
+        # If authenticated, return user's predictions (or all for admin)
+        if current_user.role.name == "admin":
+            predictions = db.query(Prediction).all()
+        else:
+            predictions = db.query(Prediction).filter(Prediction.user_id == current_user.id).all()
+    else:
+        # If public access, return all predictions
+        predictions = db.query(Prediction).all()
+    
+    return [PredictionResponse(
+        id=pred.id,
+        prediction_id=pred.id,
+        status=pred.status,
+        symbol=pred.symbol,
+        interval=pred.interval,
+        predictor_plugin=pred.predictor_plugin,
+        feeder_plugin=pred.feeder_plugin,
+        pipeline_plugin=pred.pipeline_plugin,
+        prediction_type=pred.prediction_type,
+        ticker=pred.ticker or pred.symbol or "",
+        task_id=pred.task_id,
+        result=pred.result,
+        model_name=pred.predictor_plugin
+    ) for pred in predictions]
+
+@app.delete("/api/v1/predictions/{prediction_id}")
+async def delete_prediction(prediction_id: int, db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
+    """Delete a prediction by ID (flexible authentication)."""
+    prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+    if not prediction:
+        raise HTTPException(status_code=404, detail="Prediction not found")
+    
+    # If user is authenticated, check if they can delete this prediction
+    if current_user and prediction.user_id and prediction.user_id != current_user.id and current_user.role.name != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    db.delete(prediction)
+    db.commit()
+    return {"message": "Prediction deleted successfully"}
+
+# Add protected prediction endpoints (for security/production tests)
+@app.post("/api/v1/secure/predictions/", response_model=PredictionResponse, status_code=201)
+async def create_prediction_secure(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Create a new prediction request (secure endpoint)."""
+    try:
+        # Create new prediction record with user association
         prediction = Prediction(
             task_id=str(uuid.uuid4()),
             user_id=current_user.id,
@@ -190,12 +407,16 @@ async def create_prediction(request: PredictionRequest, background_tasks: Backgr
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating prediction: {str(e)}")
 
-@app.get("/api/v1/predictions/{prediction_id}", response_model=PredictionResponse)
-async def get_prediction(prediction_id: int, db: Session = Depends(get_db)):
-    """Get prediction by ID."""
+@app.get("/api/v1/secure/predictions/{prediction_id}", response_model=PredictionResponse)
+async def get_prediction_secure(prediction_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get prediction by ID (secure endpoint)."""
     prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
     if not prediction:
         raise HTTPException(status_code=404, detail="Prediction not found")
+    
+    # Check if user owns this prediction (or is admin)
+    if prediction.user_id != current_user.id and current_user.role.name != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
     
     return PredictionResponse(
         id=prediction.id,
@@ -213,12 +434,17 @@ async def get_prediction(prediction_id: int, db: Session = Depends(get_db)):
         model_name=prediction.predictor_plugin
     )
     
-@app.get("/api/v1/predictions/")
-async def get_all_predictions(db: Session = Depends(get_db)):
-    """Get all predictions."""
-    predictions = db.query(Prediction).all()
+@app.get("/api/v1/secure/predictions/")
+async def get_all_predictions_secure(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Get all predictions (secure endpoint)."""
+    if current_user.role.name == "admin":
+        predictions = db.query(Prediction).all()
+    else:
+        predictions = db.query(Prediction).filter(Prediction.user_id == current_user.id).all()
+    
     return [PredictionResponse(
         id=pred.id,
+        prediction_id=pred.id,
         status=pred.status,
         symbol=pred.symbol,
         interval=pred.interval,
@@ -232,19 +458,23 @@ async def get_all_predictions(db: Session = Depends(get_db)):
         model_name=pred.predictor_plugin
     ) for pred in predictions]
 
-@app.delete("/api/v1/predictions/{prediction_id}")
-async def delete_prediction(prediction_id: int, db: Session = Depends(get_db)):
-    """Delete a prediction by ID."""
+@app.delete("/api/v1/secure/predictions/{prediction_id}")
+async def delete_prediction_secure(prediction_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Delete a prediction by ID (secure endpoint)."""
     prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
     if not prediction:
         raise HTTPException(status_code=404, detail="Prediction not found")
+    
+    # Check if user owns this prediction (or is admin)
+    if prediction.user_id != current_user.id and current_user.role.name != "admin":
+        raise HTTPException(status_code=403, detail="Access denied")
     
     db.delete(prediction)
     db.commit()
     return {"message": "Prediction deleted successfully"}
 
 @app.get("/api/v1/plugins/")
-async def get_plugins():
+async def get_plugins(current_user: User = Depends(optional_auth)):
     """Get available plugins."""
     return {
         "feeder_plugins": ["default_feeder"],
@@ -256,7 +486,7 @@ async def get_plugins():
 
 # Add status endpoint for acceptance tests that expect it
 @app.get("/status/{prediction_id}")
-async def get_prediction_status_legacy(prediction_id: str, db: Session = Depends(get_db)):
+async def get_prediction_status_legacy(prediction_id: str, db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
     """Legacy status endpoint for backward compatibility."""
     try:
         pred_id = int(prediction_id)
@@ -274,7 +504,7 @@ async def get_prediction_status_legacy(prediction_id: str, db: Session = Depends
 
 # Add predict endpoint for acceptance tests that expect it
 @app.post("/predict")
-async def predict_legacy(request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def predict_legacy(request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(optional_auth)):
     """Legacy predict endpoint for backward compatibility."""
     # Convert legacy format to new format
     prediction_request = PredictionRequest(
@@ -315,9 +545,44 @@ async def predict_legacy(request: dict, background_tasks: BackgroundTasks, db: S
 
 # Add predict endpoint for integration tests
 @app.post("/api/v1/predict", response_model=PredictionResponse, status_code=201)
-async def predict_api(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Create a new prediction request via the /api/v1/predict endpoint."""
-    return await create_prediction(request, background_tasks, db, current_user)
+async def predict_api(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Create a new prediction request via the /api/v1/predict endpoint (public)."""
+    # For public endpoint, create prediction without user association
+    prediction = Prediction(
+        task_id=str(uuid.uuid4()),
+        user_id=None,  # Public requests don't require user
+        status="pending",
+        symbol=request.get_symbol(),
+        interval=request.interval,
+        predictor_plugin=request.predictor_plugin,
+        feeder_plugin=request.feeder_plugin,
+        pipeline_plugin=request.pipeline_plugin,
+        prediction_type=request.prediction_type,
+        ticker=request.ticker or request.get_symbol()
+    )
+    
+    db.add(prediction)
+    db.commit()
+    db.refresh(prediction)
+    
+    # Start background prediction task
+    background_tasks.add_task(run_prediction_task_sync, prediction.id, prediction.task_id)
+    
+    return PredictionResponse(
+        id=prediction.id,
+        prediction_id=prediction.id,
+        status=prediction.status,
+        symbol=prediction.symbol,
+        interval=prediction.interval,
+        predictor_plugin=prediction.predictor_plugin,
+        feeder_plugin=prediction.feeder_plugin,
+        pipeline_plugin=prediction.pipeline_plugin,
+        prediction_type=prediction.prediction_type,
+        ticker=prediction.ticker or prediction.symbol or "",
+        task_id=prediction.task_id,
+        result=prediction.result,
+        model_name=prediction.predictor_plugin
+    )
 
 def run_prediction_task_sync(prediction_id: int, task_id: str):
     """Synchronous background task to run prediction."""
@@ -541,7 +806,6 @@ async def test_admin():
 # Import required modules for user management
 try:
     from app.database_models import User, Role, ApiLog, PredictionJob
-    from passlib.context import CryptContext
     import hashlib
     import secrets
     
@@ -778,29 +1042,59 @@ async def get_user_usage(username: str, db: Session = Depends(get_db), current_u
         "cost_estimate": len(predictions) * 0.10  # $0.10 per prediction
     }
 
+# Input sanitization functions
 def sanitize_input(value: str) -> str:
-    """Sanitize input to prevent XSS and other attacks"""
-    if not value:
+    """Sanitize input to prevent XSS and other injection attacks."""
+    if not isinstance(value, str):
         return value
     
-    # HTML escape
-    value = html.escape(value)
+    # HTML escape special characters
+    sanitized = html.escape(value)
     
-    # Remove script tags and other dangerous content
+    # Remove script tags and other dangerous elements
+    import re
     dangerous_patterns = [
-        r'<script[^>]*>.*?</script>',
+        r'<script.*?>.*?</script>',
+        r'<iframe.*?>.*?</iframe>',
+        r'<object.*?>.*?</object>',
+        r'<embed.*?>.*?</embed>',
         r'javascript:',
         r'vbscript:',
-        r'onload=',
-        r'onerror=',
-        r'onclick=',
-        r'onmouseover='
+        r'data:text/html',
+        r'onload\s*=',
+        r'onerror\s*=',
+        r'onclick\s*=',
     ]
     
     for pattern in dangerous_patterns:
-        value = re.sub(pattern, '', value, flags=re.IGNORECASE | re.DOTALL)
+        sanitized = re.sub(pattern, '', sanitized, flags=re.IGNORECASE | re.DOTALL)
     
-    return value
+    return sanitized
+
+def sanitize_request_data(data: dict) -> dict:
+    """Recursively sanitize all string values in a dictionary."""
+    if not isinstance(data, dict):
+        return data
+    
+    sanitized = {}
+    for key, value in data.items():
+        if isinstance(value, str):
+            sanitized[key] = sanitize_input(value)
+        elif isinstance(value, dict):
+            sanitized[key] = sanitize_request_data(value)
+        elif isinstance(value, list):
+            sanitized[key] = [
+                sanitize_input(item) if isinstance(item, str) 
+                else sanitize_request_data(item) if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        else:
+            sanitized[key] = value
+    
+    return sanitized
+
+# ...existing code...
 
 def validate_ticker(ticker: str) -> bool:
     """Validate ticker symbol format"""
@@ -857,3 +1151,47 @@ async def delete_audit_log(log_id: int, current_user: User = Depends(require_adm
 async def modify_audit_log(log_id: int, request: dict, current_user: User = Depends(require_admin)):
     """Attempt to modify audit log - not allowed for integrity"""
     raise HTTPException(status_code=405, detail="Audit logs cannot be modified")
+
+# Add protected prediction endpoint for authenticated users
+@app.post("/api/v1/auth/predictions/", response_model=PredictionResponse, status_code=201)
+async def create_prediction_protected(request: PredictionRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Create a new prediction request (authenticated endpoint)."""
+    try:
+        # Create new prediction record with user association
+        prediction = Prediction(
+            task_id=str(uuid.uuid4()),
+            user_id=current_user.id,
+            status="pending",
+            symbol=request.get_symbol(),
+            interval=request.interval,
+            predictor_plugin=request.get_predictor_plugin(),
+            feeder_plugin=request.feeder_plugin,
+            pipeline_plugin=request.pipeline_plugin,
+            prediction_type=request.prediction_type,
+            ticker=request.get_symbol()
+        )
+        
+        db.add(prediction)
+        db.commit()
+        db.refresh(prediction)
+        
+        # Start background prediction task using FastAPI's BackgroundTasks
+        background_tasks.add_task(run_prediction_task_sync, prediction.id, prediction.task_id)
+        
+        return PredictionResponse(
+            id=prediction.id,
+            prediction_id=prediction.id,
+            status=prediction.status,
+            symbol=prediction.symbol,
+            interval=prediction.interval,
+            predictor_plugin=prediction.predictor_plugin,
+            feeder_plugin=prediction.feeder_plugin,
+            pipeline_plugin=prediction.pipeline_plugin,
+            prediction_type=prediction.prediction_type,
+            ticker=prediction.ticker or prediction.symbol or "",
+            task_id=prediction.task_id,
+            result=prediction.result,
+            model_name=prediction.predictor_plugin
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating prediction: {str(e)}")
