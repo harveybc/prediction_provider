@@ -32,7 +32,7 @@ from app.models import Prediction
 from app.database_models import User, Role, ApiLog
 from app.auth import (
     get_current_user, require_admin, require_client, require_admin_or_operator,
-    get_password_hash, hash_api_key, verify_password, get_user_by_api_key
+    get_password_hash, hash_api_key, verify_password, get_user_by_api_key, generate_api_key
 )
 
 # Create tables
