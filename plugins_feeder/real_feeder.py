@@ -194,27 +194,23 @@ class RealFeederPlugin:
     
     def get_data_columns(self) -> List[str]:
         """
-        Get the list of expected data columns.
+        Get the list of expected data columns matching the model requirements.
         
         Returns:
-            List of column names that will be in the output data
+            List of exactly 45 column names as required by the model
         """
-        # Base columns
-        base_columns = ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'S&P500_Close', 'vix_close']
-        
-        # Tick columns
-        additional_ticks = self.params.get('additional_previous_ticks', 50)
-        num_ticks = 8 + additional_ticks
-        
-        tick_columns = []
-        for timeframe in ['15m', '30m']:
-            for i in range(1, num_ticks + 1):
-                tick_columns.append(f'tick_{timeframe}_{i}')
-        
-        # Technical indicator columns
-        tech_columns = self.tech_calculator.get_all_indicator_names()
-        
-        return base_columns + tick_columns + tech_columns
+        # Return exact columns as required by the trained model (45 total)
+        return [
+            'DATE_TIME', 'RSI', 'MACD', 'MACD_Histogram', 'MACD_Signal', 'EMA', 
+            'Stochastic_%K', 'Stochastic_%D', 'ADX', 'DI+', 'DI-', 'ATR', 'CCI', 
+            'WilliamsR', 'Momentum', 'ROC', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 
+            'BC-BO', 'BH-BL', 'BH-BO', 'BO-BL', 'S&P500_Close', 'vix_close',
+            'CLOSE_15m_tick_1', 'CLOSE_15m_tick_2', 'CLOSE_15m_tick_3', 'CLOSE_15m_tick_4',
+            'CLOSE_15m_tick_5', 'CLOSE_15m_tick_6', 'CLOSE_15m_tick_7', 'CLOSE_15m_tick_8',
+            'CLOSE_30m_tick_1', 'CLOSE_30m_tick_2', 'CLOSE_30m_tick_3', 'CLOSE_30m_tick_4',
+            'CLOSE_30m_tick_5', 'CLOSE_30m_tick_6', 'CLOSE_30m_tick_7', 'CLOSE_30m_tick_8',
+            'day_of_month', 'hour_of_day', 'day_of_week'
+        ]
     
     def get_info(self) -> Dict[str, Any]:
         """Get plugin information."""
