@@ -18,7 +18,7 @@ setup(
         ],
         # Predictor plugins - Cargan modelos y generan predicciones
         'predictor.plugins': [
-            'default_predictor=plugins_predictor.default_predictor:DefaultPredictorPlugin'            
+            'default_predictor=plugins_predictor.default_predictor:DefaultPredictor'            
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [

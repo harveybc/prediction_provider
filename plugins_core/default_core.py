@@ -35,6 +35,11 @@ from app.auth import (
     get_password_hash, hash_api_key, verify_password, get_user_by_api_key, generate_api_key
 )
 
+# Import new endpoint routers - enabling gradually
+from app.client_endpoints import router as client_router
+# from app.evaluator_endpoints import router as evaluator_router
+# from app.admin_endpoints import router as admin_router
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -144,6 +149,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register new endpoint routers - enabling gradually
+app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
+# app.include_router(evaluator_router, prefix="/api/v1/evaluator", tags=["evaluator"])
+# app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 
 # Rate limiting middleware
 @app.middleware("http")
@@ -800,11 +810,23 @@ async def predict_options():
     """Handle OPTIONS requests for CORS."""
     return {"message": "OK"}
 
-# Import user management routes will be added after fixing dependencies
-# from app.user_management import router as user_router
-
-# TODO: Add user management routes after fixing import issues
-# app.include_router(user_router, prefix="/api/v1", tags=["user_management"])
+# Import endpoint routers
+try:
+    from app.user_management import router as user_router
+    from app.evaluator_endpoints import router as evaluator_router
+    from app.client_endpoints import router as client_router
+    from app.admin_endpoints import router as admin_router
+    
+    # Register routers
+    app.include_router(user_router, prefix="/api/v1", tags=["user_management"])
+    app.include_router(evaluator_router, prefix="/api/v1/evaluator", tags=["evaluator"])
+    app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
+    app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    
+    print("All endpoint routers successfully registered")
+except ImportError as e:
+    print(f"Warning: Could not import some endpoint routers: {e}")
+    # Fall back to basic endpoints defined in this file
 
 # Add simple endpoint for testing admin key
 @app.get("/api/v1/admin/test")
