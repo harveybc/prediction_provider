@@ -1,0 +1,107 @@
+🧪 Running Prediction Provider Test Suite
+==========================================
+🏁 Starting comprehensive test run...
+
+🔍 Running Unit Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 35 items
+
+tests/unit_tests/test_api_endpoints.py ...                               [  8%]
+tests/unit_tests/test_database_models.py ..                              [ 14%]
+tests/unit_tests/test_feeder_plugins.py ...                              [ 22%]
+tests/unit_tests/test_unit_core.py ...                                   [ 31%]
+tests/unit_tests/test_unit_database.py ..                                [ 37%]
+tests/unit_tests/test_unit_endpoints.py ...                              [ 45%]
+tests/unit_tests/test_unit_feeder.py ...                                 [ 54%]
+tests/unit_tests/test_unit_models.py ....                                [ 65%]
+tests/unit_tests/test_unit_pipeline.py ..........                        [ 94%]
+tests/unit_tests/test_unit_predictor.py ..                               [100%]
+
+============================= 35 passed in 11.89s ==============================
+✅ Unit Tests: PASSED
+
+🔍 Running Integration Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 28 items
+
+tests/integration_tests/test_api_integration.py .....                    [ 17%]
+tests/integration_tests/test_database_interaction_clean.py ....          [ 32%]
+tests/integration_tests/test_database_prediction_lifecycle.py .          [ 35%]
+tests/integration_tests/test_database_schema_clean.py ......             [ 57%]
+tests/integration_tests/test_integration.py ..                           [ 64%]
+tests/integration_tests/test_model_selection_pipeline.py ..              [ 71%]
+tests/integration_tests/test_plugin_loading_clean.py ....                [ 85%]
+tests/integration_tests/test_prediction_pipeline.py ....                 [100%]
+
+============================= 28 passed in 12.45s ==============================
+✅ Integration Tests: PASSED
+
+🔍 Running Acceptance Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 11 items
+
+tests/acceptance_tests/test_acceptance.py ..........                     [ 90%]
+tests/acceptance_tests/test_lts_workflow.py .                            [100%]
+
+============================= 11 passed in 39.15s ==============================
+✅ Acceptance Tests: PASSED
+
+🔍 Running Security Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 8 items
+
+tests/security_tests/test_security_vulnerabilities.py ........           [100%]
+
+========================= 8 passed in 67.97s (0:01:07) =========================
+✅ Security Tests: PASSED
+
+🔍 Running Production Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 19 items
+
+tests/production_tests/test_production_readiness.py ...................  [100%]
+
+============================= 19 passed in 29.83s ==============================
+✅ Production Tests: PASSED
+
+🔍 Running Behavioral Tests...
+----------------------------------------
+============================= test session starts ==============================
+platform linux -- Python 3.12.9, pytest-8.4.1, pluggy-1.5.0
+rootdir: /home/harveybc/Documents/GitHub/prediction_provider
+configfile: pyproject.toml
+plugins: anyio-4.7.0, asyncio-0.25.3
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None
+collected 11 items
+
+tests/behavioral_tests/test_user_behavior.py ..

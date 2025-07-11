@@ -1,9 +1,10 @@
 """
-STL Feature Generator Plugin for Prediction Provider
+STL Feature Generator Plugin for Prediction Provider - Fully Configurable
 
 This module generates additional features from the CLOSE column to match
 the preprocessing done during model training in the predictor repo.
 
+This plugin is fully configurable and isolated for perfect replicability.
 Based on predictor/preprocessor_plugins/stl_preprocessor.py
 """
 
@@ -12,7 +13,7 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.seasonal import STL
 import logging
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Any
 
 # Try importing optional dependencies
 try:
@@ -31,65 +32,82 @@ logger = logging.getLogger(__name__)
 
 
 class STLFeatureGenerator:
-    """Generates STL, wavelet, and MTM features from CLOSE column to match predictor preprocessing."""
+    """
+    Generates STL, wavelet, and MTM features from CLOSE column.
+    Fully configurable for perfect replicability across applications.
+    """
     
-    def __init__(self):
-        # Default parameters matching predictor/preprocessor_plugins/stl_preprocessor.py
-        self.params = {
-            # STL Parameters
-            "use_stl": False,
-            "stl_period": 24,
-            "stl_window": None,  # Will be calculated as 2 * stl_period + 1
-            "stl_trend": None,   # Will be calculated based on stl_period and stl_window
-            
-            # Wavelet Parameters
-            "use_wavelets": True,
-            "wavelet_name": 'db4',
-            "wavelet_levels": 2,
-            "wavelet_mode": 'symmetric',
-            
-            # MTM Parameters
-            "use_multi_tapper": False,
-            "mtm_window_len": 168,
-            "mtm_step": 1,
-            "mtm_time_bandwidth": 5.0,
-            "mtm_num_tapers": None,
-            "mtm_freq_bands": [(0, 0.01), (0.01, 0.06), (0.06, 0.2), (0.2, 0.5)],
-            
-            # Normalization
-            "normalize_features": True,
-        }
-        self.scalers = {}
-    
-    def set_params(self, **kwargs):
-        """Update parameters and resolve defaults."""
-        for key, value in kwargs.items():
-            if key in self.params:
-                self.params[key] = value
+    # Default configuration
+    DEFAULT_CONFIG = {
+        # STL Parameters
+        "use_stl": True,
+        "stl_period": 24,
+        "stl_window": 49,  # 2 * stl_period + 1
+        "stl_trend": 25,   # Calculated based on stl_period and stl_window
         
-        # Resolve STL parameters
-        if self.params.get("stl_period") is not None and self.params.get("stl_period") > 1:
-            if self.params.get("stl_window") is None:
-                self.params["stl_window"] = 2 * self.params["stl_period"] + 1
+        # Wavelet Parameters
+        "use_wavelets": True,
+        "wavelet_name": "db4",
+        "wavelet_levels": 2,
+        "wavelet_mode": "symmetric",
+        
+        # MTM Parameters
+        "use_multi_tapper": True,
+        "mtm_window_len": 168,
+        "mtm_step": 1,
+        "mtm_time_bandwidth": 5.0,
+        "mtm_num_tapers": None,
+        "mtm_freq_bands": [(0, 0.01), (0.01, 0.06), (0.06, 0.2), (0.2, 0.5)],
+        
+        # Normalization
+        "normalize_features": True,
+    }
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize the STL feature generator with configuration.
+        
+        Args:
+            config: Configuration dictionary. If None, uses DEFAULT_CONFIG.
+        """
+        self.config = self.DEFAULT_CONFIG.copy()
+        if config:
+            self.config.update(config)
+        
+        self.scalers = {}
+        self._resolve_stl_params()
+        
+        logger.info("STLFeatureGenerator initialized")
+        logger.debug(f"Configuration: {self.config}")
+    
+    def get_config(self) -> Dict[str, Any]:
+        """Get the current configuration."""
+        return self.config.copy()
+    
+    def _resolve_stl_params(self):
+        """Resolve STL parameters based on configuration."""
+        if self.config["stl_period"] > 1:
+            if self.config["stl_window"] is None:
+                self.config["stl_window"] = 2 * self.config["stl_period"] + 1
             
-            if self.params.get("stl_trend") is None:
-                stl_window = self.params.get("stl_window")
-                if stl_window is not None and stl_window > 3:
+            if self.config["stl_trend"] is None:
+                current_window = self.config["stl_window"]
+                if current_window > 3:
                     try:
-                        trend_calc = int(1.5 * self.params["stl_period"] / (1 - 1.5 / stl_window)) + 1
-                        self.params["stl_trend"] = max(3, trend_calc)
+                        trend_calc = int(1.5 * self.config["stl_period"] / (1 - 1.5 / current_window)) + 1
+                        self.config["stl_trend"] = max(3, trend_calc)
                     except ZeroDivisionError:
-                        self.params["stl_trend"] = self.params["stl_period"] + 1
+                        self.config["stl_trend"] = self.config["stl_period"] + 1
                 else:
-                    self.params["stl_trend"] = self.params["stl_period"] + 1
+                    self.config["stl_trend"] = self.config["stl_period"] + 1
             
-            # Ensure odd number for stl_trend
-            if self.params.get("stl_trend") is not None and self.params["stl_trend"] % 2 == 0:
-                self.params["stl_trend"] += 1
+            # Ensure stl_trend is odd
+            if self.config["stl_trend"] % 2 == 0:
+                self.config["stl_trend"] += 1
     
     def _normalize_series(self, series: np.ndarray, name: str, fit: bool = False) -> np.ndarray:
         """Normalize a time series using StandardScaler."""
-        if not self.params.get("normalize_features", True):
+        if not self.config.get("normalize_features", True):
             return series.astype(np.float32)
         
         series = series.astype(np.float32)
@@ -167,9 +185,9 @@ class STLFeatureGenerator:
             logger.warning("pywt not available. Skipping wavelet features.")
             return {}
         
-        name = self.params['wavelet_name']
-        levels = self.params['wavelet_levels']
-        mode = self.params['wavelet_mode']
+        name = self.config['wavelet_name']
+        levels = self.config['wavelet_levels']
+        mode = self.config['wavelet_mode']
         
         logger.debug(f"Computing Wavelet features: {name}, levels={levels}, mode={mode}")
         
@@ -189,6 +207,8 @@ class STLFeatureGenerator:
             coeffs = pywt.swt(padded_series, name, level=levels, trim_approx=False)
             
             features = {}
+            
+            # Extract only basic coefficients (matching predictor repo)
             for level in range(levels):
                 cA, cD = coeffs[level]
                 
@@ -196,14 +216,13 @@ class STLFeatureGenerator:
                 cA = cA[:n]
                 cD = cD[:n]
                 
-                # Compute statistics for approximation and detail coefficients
-                features[f'swt_cA_L{level+1}_mean'] = np.full(n, np.mean(cA))
-                features[f'swt_cA_L{level+1}_std'] = np.full(n, np.std(cA))
-                features[f'swt_cA_L{level+1}_energy'] = np.full(n, np.sum(cA**2))
-                
-                features[f'swt_cD_L{level+1}_mean'] = np.full(n, np.mean(cD))
-                features[f'swt_cD_L{level+1}_std'] = np.full(n, np.std(cD))
-                features[f'swt_cD_L{level+1}_energy'] = np.full(n, np.sum(cD**2))
+                # Only generate basic detail coefficients (not statistics)
+                features[f'detail_L{level+1}'] = cD
+            
+            # Add final approximation coefficients
+            if len(coeffs) > 0:
+                final_cA = coeffs[-1][0][:n]  # Final level approximation, trimmed
+                features[f'approx_L{levels}'] = final_cA
             
             logger.debug(f"Wavelet features computed: {list(features.keys())}")
             return features
@@ -218,10 +237,10 @@ class STLFeatureGenerator:
             logger.warning("scipy.signal.windows not available. Skipping MTM features.")
             return {}
         
-        window_len = self.params['mtm_window_len']
-        step = self.params['mtm_step']
-        time_bandwidth = self.params['mtm_time_bandwidth']
-        freq_bands = self.params['mtm_freq_bands']
+        window_len = self.config['mtm_window_len']
+        step = self.config['mtm_step']
+        time_bandwidth = self.config['mtm_time_bandwidth']
+        freq_bands = self.config['mtm_freq_bands']
         
         logger.debug(f"Computing MTM features: window={window_len}, step={step}, NW={time_bandwidth}")
         
@@ -303,12 +322,12 @@ class STLFeatureGenerator:
         logger.debug("Generated: Log Returns (Normalized)")
         
         # 4. STL decomposition (if enabled)
-        if self.params.get('use_stl'):
+        if self.config.get('use_stl'):
             logger.info("Computing STL features...")
             try:
-                stl_window = self.params['stl_window']
-                stl_period = self.params['stl_period']
-                stl_trend = self.params['stl_trend']
+                stl_window = self.config['stl_window']
+                stl_period = self.config['stl_period']
+                stl_trend = self.config['stl_trend']
                 
                 trend, seasonal, resid = self._rolling_stl(log_series, stl_window, stl_period, stl_trend)
                 
@@ -325,7 +344,7 @@ class STLFeatureGenerator:
             logger.info("Skipped: STL features")
         
         # 5. Wavelet features (if enabled)
-        if self.params.get('use_wavelets') and HAS_WAVELETS:
+        if self.config.get('use_wavelets') and HAS_WAVELETS:
             logger.info("Computing Wavelet features...")
             try:
                 wav_features = self._compute_wavelet_features(log_series)
@@ -341,7 +360,7 @@ class STLFeatureGenerator:
             logger.info("Skipped: Wavelet features")
         
         # 6. MTM features (if enabled)
-        if self.params.get('use_multi_tapper') and HAS_MTM:
+        if self.config.get('use_multi_tapper') and HAS_MTM:
             logger.info("Computing MTM features...")
             try:
                 mtm_features = self._compute_mtm_features(log_series)

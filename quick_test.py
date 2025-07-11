@@ -17,7 +17,7 @@ def main():
         real_feeder = RealFeederPlugin(config)
         
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=1)  # Use less data to avoid hanging
+        start_date = end_date - timedelta(days=5)  # Use 5 days for STL decomposition
         
         print(f"Loading data from {start_date.strftime('%H:%M')} to {end_date.strftime('%H:%M')}")
         
@@ -42,7 +42,7 @@ def main():
         market_features = [col for col in cols if col in ['S&P500_Close', 'vix_close']]
         ohlc_features = [col for col in cols if col in ['OPEN', 'HIGH', 'LOW', 'CLOSE']]
         
-        stl_features = [col for col in cols if any(prefix in col for prefix in ['log_return', 'wav_'])]
+        stl_features = [col for col in cols if any(prefix in col for prefix in ['log_return', 'wav_', 'stl_', 'mtm_'])]
         
         print(f"\\n📊 Results:")
         print(f"   Total features: {len(cols)}")
@@ -52,13 +52,13 @@ def main():
         print(f"   Time features: {len(time_features)}/3") 
         print(f"   Market features: {len(market_features)}/2")
         print(f"   OHLC features: {len(ohlc_features)}/4")
-        print(f"   STL features: {len(stl_features)}/13")
+        print(f"   STL features: {len(stl_features)}/11")
         
-        # Base features: 16 tick + 15 tech + 4 price + 3 time + 2 market + 4 OHLC = 44
+        # Base features: 16 tick + 15 tech + 4 price + 3 time + 2 market + 3 OHLC = 43 (CLOSE removed by STL)
         base_features = len(tick_features) + len(tech_indicators) + len(price_features) + len(time_features) + len(market_features) + len(ohlc_features)
-        print(f"   Base features: {base_features}/44")
+        print(f"   Base features: {base_features}/43")
         
-        # Expected: 44 base + 10 STL/wavelet/MTM = 54 total  
+        # Expected: 43 base + 11 STL = 54 total  
         expected_total = 54
         success_rate = len(cols) / expected_total * 100
         

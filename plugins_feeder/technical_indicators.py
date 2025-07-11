@@ -75,8 +75,9 @@ class TechnicalIndicatorCalculator:
             seasonality_features = self._calculate_seasonality_features(data)
             indicators.update(seasonality_features)
             
-            # Preserve non-OHLC columns (like S&P500_Close, vix_close)
-            preserve_cols = ['S&P500_Close', 'vix_close']
+            # Preserve OHLC columns and other market data columns
+            # CLOSE will be used for STL processing then removed later
+            preserve_cols = ['OPEN', 'HIGH', 'LOW', 'CLOSE', 'S&P500_Close', 'vix_close']
             for col in preserve_cols:
                 if col in data.columns:
                     indicators[col] = data[col]
