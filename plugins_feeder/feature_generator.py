@@ -119,7 +119,7 @@ class FeatureGenerator:
                     
                     # Create column names (tick_1 is most recent, tick_N is oldest)
                     for i, tick_value in enumerate(reversed(last_ticks)):
-                        col_name = f'tick_{timeframe}_{i+1}'
+                        col_name = f'CLOSE_{timeframe}_tick_{i+1}'
                         tick_features.loc[timestamp, col_name] = tick_value
                         
                 else:
@@ -132,7 +132,7 @@ class FeatureGenerator:
                         padded_ticks[-len(available_ticks):] = available_ticks
                         
                         for i, tick_value in enumerate(reversed(padded_ticks)):
-                            col_name = f'tick_{timeframe}_{i+1}'
+                            col_name = f'CLOSE_{timeframe}_tick_{i+1}'
                             tick_features.loc[timestamp, col_name] = tick_value
                     else:
                         # No historical data available, will be forward filled later

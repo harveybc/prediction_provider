@@ -28,6 +28,7 @@ from .data_fetcher import DataFetcher
 from .feature_generator import FeatureGenerator
 from .data_normalizer import DataNormalizer
 from .data_validator import DataValidator
+from .stl_feature_generator import STLFeatureGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +49,19 @@ class RealFeederPlugin:
         "window_size": 256,
         "use_normalization_json": "examples/data/phase_3/phase_3_debug_out.json",
         "target_column": "CLOSE",
-        "additional_previous_ticks": 50,  # Extra ticks for technical indicators
-        "error_tolerance": 0.001  # Tolerance for validation against historical data
+        "additional_previous_ticks": 0,  # Extra ticks for technical indicators (0 = only the standard 8)
+        "error_tolerance": 0.001,  # Tolerance for validation against historical data
+        
+        # STL Feature Generation Parameters (matching predictor repo)
+        "use_stl": True,
+        "stl_period": 24,
+        "use_wavelets": True,
+        "wavelet_name": 'db4',
+        "wavelet_levels": 2,
+        "wavelet_mode": 'symmetric',
+        "use_multi_tapper": True,
+        "mtm_window_len": 168,
+        "normalize_features": True,
     }
     
     def __init__(self, config=None):
@@ -63,6 +75,7 @@ class RealFeederPlugin:
         self.data_fetcher = DataFetcher()
         self.feature_generator = FeatureGenerator()
         self.tech_calculator = TechnicalIndicatorCalculator()
+        self.stl_generator = STLFeatureGenerator()
         
         # These will be initialized when loading data
         self.data_normalizer = None
@@ -118,16 +131,53 @@ class RealFeederPlugin:
             )
             
             # Step 3: Calculate technical indicators
+            logger.info(f"Feature data shape before tech indicators: {feature_data.shape if feature_data is not None else 'None'}")
+            logger.info(f"Feature data columns: {list(feature_data.columns) if feature_data is not None else 'None'}")
+            
             tech_data = self.tech_calculator.calculate_all_indicators(feature_data)
             
-            # Step 4: Normalize the data
+            # Step 4: Generate STL features from CLOSE column to match predictor preprocessing
+            if feature_data is not None and not feature_data.empty and 'CLOSE' in feature_data.columns:
+                logger.info("Generating STL features from CLOSE column...")
+                self.stl_generator.set_params(**self.params)
+                stl_features = self.stl_generator.generate_features(feature_data['CLOSE'].values)
+                
+                # Add STL features to the tech_data dataset
+                if stl_features:
+                    # Align STL features with the technical data
+                    base_length = len(tech_data)
+                    for feature_name, feature_values in stl_features.items():
+                        if len(feature_values) == base_length:
+                            tech_data[feature_name] = feature_values
+                        elif len(feature_values) > base_length:
+                            # Trim from beginning to match
+                            tech_data[feature_name] = feature_values[-base_length:]
+                        else:
+                            # Pad with last value if shorter
+                            padding = np.full(base_length - len(feature_values), 
+                                            feature_values[-1] if len(feature_values) > 0 else 0.0)
+                            tech_data[feature_name] = np.concatenate([padding, feature_values])
+                    
+                    logger.info(f"Added {len(stl_features)} STL features. Dataset shape: {tech_data.shape}")
+                else:
+                    logger.warning("No STL features generated")
+                
+                # Also preserve the original OHLC columns in the final dataset
+                for col in ['OPEN', 'HIGH', 'LOW', 'CLOSE']:
+                    if col in feature_data.columns and col not in tech_data.columns:
+                        tech_data[col] = feature_data[col]
+                        
+            else:
+                logger.warning("Cannot generate STL features: missing CLOSE column or empty data")
+            
+            # Step 5: Normalize the data
             if self.data_normalizer:
                 normalized_data = self.data_normalizer.normalize_data(tech_data)
             else:
                 logger.warning("No normalizer available, skipping normalization")
                 normalized_data = tech_data
             
-            # Step 5: Validate the data
+            # Step 6: Validate the data
             if self.data_validator:
                 self._validate_output_data(normalized_data, start_date, end_date)
             
@@ -197,10 +247,10 @@ class RealFeederPlugin:
         Get the list of expected data columns matching the model requirements.
         
         Returns:
-            List of exactly 45 column names as required by the model
+            List of data column names including base features + STL features (54+ total)
         """
-        # Return exact columns as required by the trained model (45 total)
-        return [
+        # Base 44 columns from technical indicators and features
+        base_columns = [
             'DATE_TIME', 'RSI', 'MACD', 'MACD_Histogram', 'MACD_Signal', 'EMA', 
             'Stochastic_%K', 'Stochastic_%D', 'ADX', 'DI+', 'DI-', 'ATR', 'CCI', 
             'WilliamsR', 'Momentum', 'ROC', 'OPEN', 'HIGH', 'LOW', 'CLOSE', 
@@ -211,6 +261,17 @@ class RealFeederPlugin:
             'CLOSE_30m_tick_5', 'CLOSE_30m_tick_6', 'CLOSE_30m_tick_7', 'CLOSE_30m_tick_8',
             'day_of_month', 'hour_of_day', 'day_of_week'
         ]
+        
+        # Additional STL-generated features (10 features with default config: log_return + 12 wavelet features)
+        stl_columns = [
+            'log_return',
+            'wav_swt_cA_L1_mean', 'wav_swt_cA_L1_std', 'wav_swt_cA_L1_energy',
+            'wav_swt_cD_L1_mean', 'wav_swt_cD_L1_std', 'wav_swt_cD_L1_energy',
+            'wav_swt_cA_L2_mean', 'wav_swt_cA_L2_std', 'wav_swt_cA_L2_energy',
+            'wav_swt_cD_L2_mean', 'wav_swt_cD_L2_std', 'wav_swt_cD_L2_energy'
+        ]
+        
+        return base_columns + stl_columns
     
     def get_info(self) -> Dict[str, Any]:
         """Get plugin information."""
@@ -223,6 +284,7 @@ class RealFeederPlugin:
                 "data_fetcher": "DataFetcher",
                 "feature_generator": "FeatureGenerator", 
                 "technical_indicators": "TechnicalIndicatorCalculator",
+                "stl_feature_generator": "STLFeatureGenerator",
                 "data_normalizer": "DataNormalizer" if self.data_normalizer else None,
                 "data_validator": "DataValidator" if self.data_validator else None
             },
