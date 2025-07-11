@@ -15,6 +15,7 @@ from app.database import Base
 
 class Prediction(Base):
     __tablename__ = 'predictions'
+    __table_args__ = {'extend_existing': True}
 
     id = Column(Integer, primary_key=True)
     task_id = Column(String, unique=True, nullable=True)
