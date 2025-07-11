@@ -16,6 +16,7 @@ from app.database import Base
 
 class User(Base):
     __tablename__ = 'users'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
@@ -33,6 +34,7 @@ class User(Base):
 
 class Role(Base):
     __tablename__ = 'roles'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
     description = Column(Text, nullable=True)
@@ -41,6 +43,7 @@ class Role(Base):
 
 class PredictionJob(Base):
     __tablename__ = 'prediction_jobs'
+    __table_args__ = {'extend_existing': True}
     id = Column(String, primary_key=True, index=True) # Using request UUID as string
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     ticker = Column(String, nullable=False)
@@ -58,6 +61,7 @@ class PredictionJob(Base):
 
 class ApiLog(Base):
     __tablename__ = 'api_logs'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, index=True)
     request_id = Column(String, unique=True, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=True) # Nullable for failed authentication
@@ -85,10 +89,12 @@ class TimeSeriesData(Base):
     
     __table_args__ = (
         PrimaryKeyConstraint('ticker', 'timestamp'),
+        {'extend_existing': True}
     )
 
 class SystemConfiguration(Base):
     __tablename__ = 'system_configuration'
+    __table_args__ = {'extend_existing': True}
     id = Column(Integer, primary_key=True, index=True)
     key = Column(String, unique=True, index=True, nullable=False)
     value = Column(JSON, nullable=False)
@@ -98,6 +104,7 @@ class SystemConfiguration(Base):
 
 class UserSession(Base):
     __tablename__ = 'user_sessions'
+    __table_args__ = {'extend_existing': True}
     id = Column(String, primary_key=True, index=True)  # Session token
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     ip_address = Column(String, nullable=False)
