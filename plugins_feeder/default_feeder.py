@@ -49,7 +49,11 @@ class DefaultFeeder:
             self._load_normalization_params()
 
     def _load_normalization_params(self):
-        path = self.params["use_normalization_json"]
+        path = self.params.get("use_normalization_json")
+        if not path:
+            self.normalization_params = {}
+            return
+            
         try:
             with open(path, 'r') as f:
                 self.normalization_params = json.load(f)

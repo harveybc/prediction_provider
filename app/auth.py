@@ -124,13 +124,16 @@ async def get_current_user(api_key: str = Security(api_key_header), db: Session 
     """Get current user (preferred method)"""
     return await get_current_user_from_api_key(api_key, db)
 
-def require_role(required_role: str):
-    """Decorator to require specific role"""
+def require_role(required_roles):
+    """Decorator to require specific role(s) - supports both string and list"""
+    if isinstance(required_roles, str):
+        required_roles = [required_roles]
+    
     def role_checker(current_user: User = Depends(get_current_user)):
-        if current_user.role.name != required_role:
+        if current_user.role.name not in required_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions",
+                detail=f"Insufficient permissions. Required roles: {', '.join(required_roles)}",
             )
         return current_user
     return role_checker
@@ -141,13 +144,15 @@ def require_any_role(required_roles: list):
         if current_user.role.name not in required_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions",
+                detail=f"Insufficient permissions. Required roles: {', '.join(required_roles)}",
             )
         return current_user
     return role_checker
 
 # Role-based dependencies
-require_admin = require_role("admin")
+require_admin = require_role("administrator")
 require_client = require_role("client")
+require_evaluator = require_role("evaluator")
 require_operator = require_role("operator")
-require_admin_or_operator = require_any_role(["admin", "operator"])
+require_admin_or_operator = require_any_role(["administrator", "operator"])
+require_evaluator_or_admin = require_any_role(["evaluator", "administrator"])

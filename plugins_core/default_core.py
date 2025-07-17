@@ -35,6 +35,11 @@ from app.auth import (
     get_password_hash, hash_api_key, verify_password, get_user_by_api_key, generate_api_key
 )
 
+# Import new endpoint routers - enabling gradually
+from app.client_endpoints import router as client_router
+# from app.evaluator_endpoints import router as evaluator_router
+# from app.admin_endpoints import router as admin_router
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
@@ -144,6 +149,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register new endpoint routers - enabling gradually
+app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
+# app.include_router(evaluator_router, prefix="/api/v1/evaluator", tags=["evaluator"])
+# app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 
 # Rate limiting middleware
 @app.middleware("http")
@@ -738,86 +748,58 @@ class PluginManager:
 
 class DefaultCorePlugin:
     """
-    The central core plugin for the Prediction Provider application.
-    This plugin is responsible for managing the FastAPI application lifecycle.
+    Default Core Plugin for the Prediction Provider.
+    
+    This plugin manages the FastAPI application and coordinates with other plugins.
     """
-
+    
     plugin_params = {
         "host": "127.0.0.1",
         "port": 8000,
+        "reload": False,
+        "workers": 1
     }
-
-    plugin_debug_vars = ["host", "port"]
-
+    
+    plugin_debug_vars = ["host", "port", "reload", "workers"]
+    
     def __init__(self, config):
-        """
-        Initializes the core plugin.
-
-        Args:
-            config (dict): The global application configuration.
-        """
-        self.params = self.plugin_params.copy()
-        self.params.update(config)
+        """Initialize the core plugin with configuration."""
+        self.config = config
+        self.app = app  # Reference to the FastAPI app
         self.plugins = {}
-        self.app = app  # Use the module-level app instance
-
-    def set_params(self, **kwargs):
-        """
-        Updates the core parameters.
-        """
-        self.params.update(kwargs)
-
-    def set_plugins(self, plugins: dict):
-        """
-        Receives all loaded plugins from the main orchestrator.
-        It then registers the necessary components, like API endpoints.
-        """
-        self.plugins = plugins
-        print("Core plugin received plugins:", list(self.plugins.keys()))
         
-        endpoints_plugin = self.plugins.get('endpoints')
-        if endpoints_plugin and hasattr(endpoints_plugin, 'register_routes'):
-            print("Registering routes from endpoints plugin...")
-            endpoints_plugin.register_routes(self.app)
-        else:
-            print("Warning: Endpoints plugin not found or it lacks a 'register_routes' method.")
-
+    def set_params(self, **params):
+        """Set plugin parameters."""
+        for key, value in params.items():
+            if key in self.plugin_params:
+                self.plugin_params[key] = value
+                
+    def set_plugins(self, plugins):
+        """Set references to other loaded plugins."""
+        self.plugins = plugins
+        
     def start(self):
-        """
-        Starts the FastAPI application using uvicorn.
-        """
-        print(f"--- Starting FastAPI Server at http://{self.params['host']}:{self.params['port']} ---")
-        try:
-            uvicorn.run(
-                self.app,
-                host=self.params['host'],
-                port=self.params['port']
-            )
-        except Exception as e:
-            print(f"Error starting uvicorn server: {e}")
-
+        """Start the FastAPI application."""
+        import uvicorn
+        
+        host = self.plugin_params.get("host", "127.0.0.1")
+        port = self.plugin_params.get("port", 8000)
+        reload = self.plugin_params.get("reload", False)
+        workers = self.plugin_params.get("workers", 1)
+        
+        print(f"Starting FastAPI server on {host}:{port}")
+        uvicorn.run(
+            "plugins_core.default_core:app",
+            host=host,
+            port=port,
+            reload=reload,
+            workers=workers
+        )
+        
     def stop(self):
-        """
-        Stops the application. Uvicorn handles graceful shutdown.
-        """
-        print("--- Stopping Application ---")
-        # This is a simplified stop mechanism. A more robust implementation
-        # would involve signaling the threads to stop gracefully.
-        if hasattr(self, 'pipeline_thread') and self.pipeline_thread.is_alive():
-            # In a real-world scenario, you'd have a more graceful shutdown mechanism
-            # For now, we rely on daemon threads
-            pass
-
-        print("--- Application Stopped ---")
-
-    def _get_plugin_by_type(self, plugin_type):
-        """
-        Finds the first loaded plugin from a given directory prefix.
-        """
-        for name, plugin in self.plugins.items():
-            if name.startswith(plugin_type):
-                return plugin
-        return None
+        """Stop the application (placeholder for future implementation)."""
+        print("Stopping core plugin...")
+        pass
 
 # For backward compatibility
 Plugin = DefaultCorePlugin
@@ -828,11 +810,23 @@ async def predict_options():
     """Handle OPTIONS requests for CORS."""
     return {"message": "OK"}
 
-# Import user management routes will be added after fixing dependencies
-# from app.user_management import router as user_router
-
-# TODO: Add user management routes after fixing import issues
-# app.include_router(user_router, prefix="/api/v1", tags=["user_management"])
+# Import endpoint routers
+try:
+    from app.user_management import router as user_router
+    from app.evaluator_endpoints import router as evaluator_router
+    from app.client_endpoints import router as client_router
+    from app.admin_endpoints import router as admin_router
+    
+    # Register routers
+    app.include_router(user_router, prefix="/api/v1", tags=["user_management"])
+    app.include_router(evaluator_router, prefix="/api/v1/evaluator", tags=["evaluator"])
+    app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
+    app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
+    
+    print("All endpoint routers successfully registered")
+except ImportError as e:
+    print(f"Warning: Could not import some endpoint routers: {e}")
+    # Fall back to basic endpoints defined in this file
 
 # Add simple endpoint for testing admin key
 @app.get("/api/v1/admin/test")

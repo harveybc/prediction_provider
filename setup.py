@@ -14,14 +14,15 @@ setup(
         ],
         # Data feeder plugins - Obtienen y preparan datos de entrada
         'feeder.plugins': [
-            'default_feeder=plugins_feeder.default_feeder:DefaultFeederPlugin'
+            'default_feeder=plugins_feeder.default_feeder:DefaultFeeder'
         ],
         # Predictor plugins - Cargan modelos y generan predicciones
         'predictor.plugins': [
-            'default_predictor=plugins_predictor.default_predictor:DefaultPredictorPlugin'            
+            'default_predictor=plugins_predictor.default_predictor:DefaultPredictor'            
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [
+            'default_endpoints=plugins_endpoints.default_endpoints:DefaultEndpointsPlugin',
             'predict_endpoint=plugins_endpoints.predict_endpoint:PredictEndpointPlugin',
             'health_endpoint=plugins_endpoints.health_endpoint:HealthEndpointPlugin',
             'info_endpoint=plugins_endpoints.info_endpoint:InfoEndpointPlugin',
