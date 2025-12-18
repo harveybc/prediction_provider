@@ -109,6 +109,26 @@ class DefaultPipelinePlugin:
         else:
             print("Warning: Pipeline initialization incomplete.")
 
+    def run_request(self, request: dict) -> dict:
+        """Run a single prediction request and return a structured result.
+
+        Expected request keys (best-effort):
+        - baseline_datetime: ISO string for the baseline timestamp
+        - horizons: list[int] of steps ahead (e.g. [1,2,3])
+        - date_column / target_column: column names in feeder data
+        """
+        if not self.predictor_plugin or not self.feeder_plugin:
+            raise RuntimeError("Pipeline not initialized with predictor+feeder")
+
+        input_df = self.feeder_plugin.fetch()
+        if input_df is None or input_df.empty:
+            raise RuntimeError("Feeder returned no data")
+
+        if hasattr(self.predictor_plugin, "predict_request"):
+            return self.predictor_plugin.predict_request(input_df, request)
+
+        raise RuntimeError("Predictor plugin does not implement predict_request")
+
     def _initialize_database(self):
         """
         Initialize the SQLite database for storing predictions.

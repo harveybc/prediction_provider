@@ -314,6 +314,82 @@ class DefaultPredictor:
         except Exception as e:
             raise Exception(f"Prediction failed: {str(e)}")
 
+    def predict_request(self, input_df: pd.DataFrame, request: dict) -> dict:
+        """Predict for a single API request.
+
+        For an initial, model-free run, this acts as an *ideal* predictor:
+        it returns the observed future values from the provided dataset at
+        the requested horizons relative to the baseline timestamp.
+        """
+        if input_df is None or input_df.empty:
+            raise ValueError("input_df is empty")
+
+        date_column = request.get("date_column") or "DATE_TIME"
+        target_column = request.get("target_column") or self.params.get("prediction_target_column") or "CLOSE"
+
+        horizons = request.get("horizons")
+        if horizons is None:
+            horizon_n = request.get("prediction_horizon") or self.params.get("prediction_horizon") or 1
+            horizons = list(range(1, int(horizon_n) + 1))
+        horizons = [int(h) for h in horizons]
+        if any(h <= 0 for h in horizons):
+            raise ValueError("horizons must be positive integers")
+
+        df = input_df.copy()
+        if date_column not in df.columns:
+            raise ValueError(f"date_column '{date_column}' not found in feeder data")
+        if target_column not in df.columns:
+            raise ValueError(f"target_column '{target_column}' not found in feeder data")
+
+        df[date_column] = pd.to_datetime(df[date_column], errors="coerce")
+        df = df.dropna(subset=[date_column]).sort_values(date_column).reset_index(drop=True)
+
+        baseline_dt_raw = request.get("baseline_datetime") or request.get("datetime")
+        if baseline_dt_raw:
+            baseline_dt = pd.to_datetime(baseline_dt_raw, errors="coerce")
+            if pd.isna(baseline_dt):
+                raise ValueError("baseline_datetime could not be parsed")
+        else:
+            # Default: last row that still has room for max horizon
+            max_h = max(horizons) if horizons else 1
+            baseline_dt = df.loc[max(0, len(df) - 1 - max_h), date_column]
+
+        # Find exact match; otherwise the latest <= baseline
+        exact = df.index[df[date_column] == baseline_dt]
+        if len(exact) > 0:
+            baseline_idx = int(exact[-1])
+        else:
+            leq = df.index[df[date_column] <= baseline_dt]
+            baseline_idx = int(leq[-1]) if len(leq) > 0 else 0
+
+        baseline_value = float(df.loc[baseline_idx, target_column])
+
+        predictions = []
+        future_datetimes = []
+        errors = []
+        for h in horizons:
+            idx = baseline_idx + h
+            if idx >= len(df):
+                predictions.append(None)
+                future_datetimes.append(None)
+                errors.append({"horizon": h, "error": "insufficient_future_data"})
+                continue
+            predictions.append(float(df.loc[idx, target_column]))
+            future_datetimes.append(df.loc[idx, date_column].isoformat())
+
+        return {
+            "mode": "ideal_future_baseline",
+            "date_column": date_column,
+            "target_column": target_column,
+            "baseline_datetime": df.loc[baseline_idx, date_column].isoformat(),
+            "baseline_value": baseline_value,
+            "horizons": horizons,
+            "predictions": predictions,
+            "future_datetimes": future_datetimes,
+            "uncertainty": [0.0 if p is not None else None for p in predictions],
+            "errors": errors,
+        }
+
     def _denormalize(self, predictions, uncertainties):
         """
         De-normalize predictions and uncertainties.

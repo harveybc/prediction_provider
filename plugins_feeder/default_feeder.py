@@ -13,8 +13,15 @@ import json
 from datetime import datetime, timedelta
 import requests
 import os
-import pandas_ta as ta
-import yfinance as yf
+try:
+    import pandas_ta as ta
+except Exception:  # optional dependency
+    ta = None
+
+try:
+    import yfinance as yf
+except Exception:  # optional dependency
+    yf = None
 
 class DefaultFeeder:
     """
@@ -23,13 +30,17 @@ class DefaultFeeder:
     
     # Plugin parameters with default values
     plugin_params = {
+        "data_source": "yfinance",  # 'yfinance' | 'file'
+        "data_file_path": None,
+        "date_column": "DATE_TIME",
+        "feature_columns": None,
         "instrument": "MSFT",
         "correlated_instruments": [],
         "n_batches": 1,
         "batch_size": 256,
         "window_size": 256,
         "use_normalization_json": None,
-        "target_column": "Close",
+        "target_column": "CLOSE",
     }
     
     def __init__(self, config=None):
@@ -41,12 +52,31 @@ class DefaultFeeder:
         """
         self.params = self.plugin_params.copy()
         self.normalization_params = None
+        self._file_df_cache = None
         
         if config:
             self.set_params(**config)
 
         if self.params.get("use_normalization_json"):
             self._load_normalization_params()
+
+        if self.params.get("data_source") == "file" and self.params.get("data_file_path"):
+            self._load_file_data()
+
+    def _load_file_data(self):
+        path = self.params.get("data_file_path")
+        if not path:
+            self._file_df_cache = None
+            return
+
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"data_file_path not found: {path}")
+
+        date_col = self.params.get("date_column", "DATE_TIME")
+        df = pd.read_csv(path)
+        if date_col in df.columns:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+        self._file_df_cache = df
 
     def _load_normalization_params(self):
         path = self.params.get("use_normalization_json")
@@ -69,9 +99,14 @@ class DefaultFeeder:
             self.params[key] = value
         if 'use_normalization_json' in kwargs:
             self._load_normalization_params()
+        if 'data_file_path' in kwargs or 'data_source' in kwargs or 'date_column' in kwargs:
+            if self.params.get("data_source") == "file" and self.params.get("data_file_path"):
+                self._load_file_data()
 
     def _fetch_instrument_data(self, instrument, period="5d", interval="1h"):
         """Fetches historical data for a single instrument from yfinance."""
+        if yf is None:
+            raise ImportError("yfinance is required for data_source='yfinance'")
         ticker = yf.Ticker(instrument)
         hist = ticker.history(period=period, interval=interval)
         return hist
@@ -82,6 +117,9 @@ class DefaultFeeder:
         """
         if df is None or df.empty:
             return pd.DataFrame()
+
+        if ta is None:
+            raise ImportError("pandas_ta is required to calculate technical indicators")
 
         # Define a custom strategy to avoid indicators with deprecated pandas functions
         custom_strategy = ta.Strategy(
@@ -134,6 +172,12 @@ class DefaultFeeder:
 
     def fetch(self) -> pd.DataFrame:
         """Main method to fetch, process, and return data."""
+        if self.params.get("data_source") == "file":
+            if self._file_df_cache is None:
+                self._load_file_data()
+            df = self._file_df_cache.copy() if self._file_df_cache is not None else pd.DataFrame()
+            return df.reset_index(drop=True)
+
         instrument = self.params.get("instrument", "EURUSD=X")
         num_records = self.params.get("n_batches", 1) * self.params.get("batch_size", 256)
 
@@ -156,11 +200,6 @@ class DefaultFeeder:
 
         # Normalize data
         df = self._normalize_data(df)
-
-        # Ensure correct column order as per REFERENCE.md
-        required_columns = [
-            'DATE_TIME','RSI','MACD_12_26_9','MACDh_12_26_9','MACDs_12_26_9','EMA_20','STOCHk_14_3_3','STOCHd_14_3_3','ADX_14','DMP_14','DMN_14','ATR_14','CCI_14_0.015','WILLR_14','MOM_10','ROC_10','Open','High','Low','Close','BC-BO','BH-BL','BH-BO','BO-BL','^GSPC_Close','^VIX_Close','CLOSE_15m_tick_1','CLOSE_15m_tick_2','CLOSE_15m_tick_3','CLOSE_15m_tick_4','CLOSE_15m_tick_5','CLOSE_15m_tick_6','CLOSE_15m_tick_7','CLOSE_15m_tick_8','CLOSE_30m_tick_1','CLOSE_30m_tick_2','CLOSE_30m_tick_3','CLOSE_30m_tick_4','CLOSE_30m_tick_5','CLOSE_30m_tick_6','CLOSE_30m_tick_7','CLOSE_30m_tick_8','day_of_month','hour_of_day','day_of_week'
-        ]
 
         # Adjust column names from pandas_ta
         df.rename(columns={

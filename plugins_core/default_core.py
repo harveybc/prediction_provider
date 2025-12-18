@@ -79,6 +79,12 @@ class PredictionRequest(BaseModel):
     # Alternative field names for compatibility
     model_name: Optional[str] = Field(default=None, description="Model name (maps to predictor_plugin)")
     prediction_horizon: Optional[int] = Field(default=1, description="Prediction horizon")
+
+    # Ideal-baseline request parameters
+    baseline_datetime: Optional[str] = Field(default=None, description="Baseline timestamp (ISO).")
+    horizons: Optional[list[int]] = Field(default=None, description="List of step-ahead horizons.")
+    date_column: Optional[str] = Field(default=None, description="Datetime column name in feeder data")
+    target_column: Optional[str] = Field(default=None, description="Target column to predict")
     
     @field_validator('prediction_type')
     @classmethod
@@ -267,7 +273,8 @@ async def create_prediction(request: PredictionRequest, background_tasks: Backgr
             feeder_plugin=feeder_plugin,
             pipeline_plugin=pipeline_plugin,
             prediction_type=prediction_type,
-            ticker=ticker
+            ticker=ticker,
+            result={"request": request.model_dump()}
         )
         
         db.add(prediction)
@@ -384,7 +391,8 @@ async def create_prediction_secure(request: PredictionRequest, background_tasks:
             feeder_plugin=request.feeder_plugin,
             pipeline_plugin=request.pipeline_plugin,
             prediction_type=request.prediction_type,
-            ticker=request.get_symbol()
+            ticker=request.get_symbol(),
+            result={"request": request.model_dump()}
         )
         
         db.add(prediction)
@@ -585,7 +593,8 @@ async def predict_api(prediction_request: PredictionRequest, background_tasks: B
         feeder_plugin=prediction_request.feeder_plugin,
         pipeline_plugin=prediction_request.pipeline_plugin,
         prediction_type=prediction_request.prediction_type,
-        ticker=prediction_request.ticker or prediction_request.get_symbol()
+        ticker=prediction_request.ticker or prediction_request.get_symbol(),
+        result={"request": prediction_request.model_dump()}
     )
     
     db.add(prediction)
@@ -630,46 +639,51 @@ async def predict_api(prediction_request: PredictionRequest, background_tasks: B
 def run_prediction_task_sync(prediction_id: int, task_id: str, user_id: Optional[int] = None):
     """Synchronous background task to run prediction."""
     import logging
-    import time
     logger = logging.getLogger(__name__)
-    
+
+    from app.database import SessionLocal
+    db = SessionLocal()
+    request_payload = None
     try:
+        prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
+        if not prediction:
+            return
+
+        # Mark processing
+        prediction.status = "processing"
+        request_payload = (prediction.result or {}).get("request", {})
+        db.commit()
         logger.info(f"Prediction {prediction_id}: Status changed to processing")
-        
-        # Simulate prediction processing
-        time.sleep(2)  # Simulate some processing time
-        
-        # Update prediction status to completed
-        from app.database import SessionLocal
-        db = SessionLocal()
-        try:
-            prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
-            if prediction:
-                prediction.status = "completed"
-                prediction.result = {
-                    "prediction": [1.0, 2.0, 3.0, 4.0, 5.0],
-                    "uncertainty": [0.1, 0.2, 0.15, 0.25, 0.18]
-                }
-                db.commit()
-                logger.info(f"Prediction {prediction_id}: Status changed to completed")
-        finally:
-            db.close()
+
+        # Use loaded plugins (set by DefaultCorePlugin.set_plugins)
+        pipeline = globals().get("_LOADED_PLUGINS", {}).get("pipeline")
+        if pipeline is None:
+            raise RuntimeError("Pipeline plugin not available")
+
+        output = pipeline.run_request(request_payload)
+
+        prediction.status = "completed"
+        prediction.result = {
+            "request": request_payload,
+            "output": output,
+        }
+        db.commit()
+        logger.info(f"Prediction {prediction_id}: Status changed to completed")
     except Exception as e:
         logger.error(f"Error in prediction task {prediction_id}: {str(e)}")
-        # Update prediction status to failed
-        from app.database import SessionLocal
-        db = SessionLocal()
         try:
             prediction = db.query(Prediction).filter(Prediction.id == prediction_id).first()
             if prediction:
                 prediction.status = "failed"
-                prediction.result = {"error": str(e)}
+                prediction.result = {
+                    "request": request_payload,
+                    "error": str(e),
+                }
                 db.commit()
-                logger.info(f"Prediction {prediction_id}: Status changed to failed")
         finally:
-            db.close()
+            pass
     finally:
-        # Decrement concurrent prediction count for authenticated users
+        db.close()
         if user_id:
             decrement_concurrent_predictions(str(user_id))
 
@@ -777,6 +791,19 @@ class DefaultCorePlugin:
     def set_plugins(self, plugins):
         """Set references to other loaded plugins."""
         self.plugins = plugins
+
+        # Make plugins visible to module-level background tasks
+        globals()["_LOADED_PLUGINS"] = plugins
+
+        # Initialize pipeline for one-shot requests
+        pipeline = plugins.get("pipeline")
+        predictor = plugins.get("predictor")
+        feeder = plugins.get("feeder")
+        if pipeline and predictor and feeder and hasattr(pipeline, "initialize"):
+            try:
+                pipeline.initialize(predictor, feeder)
+            except Exception as e:
+                print(f"Warning: failed to initialize pipeline with predictor+feeder: {e}")
         
     def start(self):
         """Start the FastAPI application."""

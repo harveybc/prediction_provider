@@ -1,0 +1,26 @@
+@host = http://localhost:8000
+
+### Health
+GET {{host}}/health
+
+### Create prediction (ideal future baseline)
+# Baseline exists in examples/data/phase_3/base_d1.csv (e.g. 2005-05-10 00:00:00)
+POST {{host}}/api/v1/predict
+Content-Type: application/json
+
+{
+  "symbol": "EURUSD",
+  "interval": "1h",
+  "predictor_plugin": "default_predictor",
+  "feeder_plugin": "default_feeder",
+  "pipeline_plugin": "default_pipeline",
+  "prediction_type": "short_term",
+
+  "baseline_datetime": "2005-05-10 00:00:00",
+  "horizons": [1, 2, 3, 4, 5, 6],
+  "date_column": "DATE_TIME",
+  "target_column": "CLOSE"
+}
+
+### Poll prediction by numeric id (edit {id} after creating)
+GET {{host}}/api/v1/predictions/{{id}}
