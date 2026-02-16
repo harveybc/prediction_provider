@@ -7,6 +7,9 @@ Module for loading plugins using the importlib.metadata entry points API updated
 Provides functions to load a specific plugin and retrieve its parameters.
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 from importlib.metadata import entry_points, EntryPoint
 
 def load_plugin(plugin_group: str, plugin_name: str):
@@ -28,7 +31,7 @@ def load_plugin(plugin_group: str, plugin_name: str):
         ImportError: If the plugin is not found in the specified group.
         Exception: For any other errors during the plugin loading process.
     """
-    print(f"Attempting to load plugin: {plugin_name} from group: {plugin_group}")
+    if not _QUIET: print(f"Attempting to load plugin: {plugin_name} from group: {plugin_group}")
     try:
         # Filter entry points for the specified group using the new .select() method.
         group_entries = entry_points().select(group=plugin_group)
@@ -38,13 +41,13 @@ def load_plugin(plugin_group: str, plugin_name: str):
         plugin_class = entry_point.load()
         # Extract the keys from the plugin's plugin_params attribute as required parameters.
         required_params = list(plugin_class.plugin_params.keys())
-        print(f"Successfully loaded plugin: {plugin_name} with params: {plugin_class.plugin_params}")
+        if not _QUIET: print(f"Successfully loaded plugin: {plugin_name} with params: {plugin_class.plugin_params}")
         return plugin_class, required_params
     except StopIteration:
-        print(f"Failed to find plugin {plugin_name} in group {plugin_group}")
+        if not _QUIET: print(f"Failed to find plugin {plugin_name} in group {plugin_group}")
         raise ImportError(f"Plugin {plugin_name} not found in group {plugin_group}.")
     except Exception as e:
-        print(f"Failed to load plugin {plugin_name} from group {plugin_group}, Error: {e}")
+        if not _QUIET: print(f"Failed to load plugin {plugin_name} from group {plugin_group}, Error: {e}")
         raise
 
 def get_plugin_params(plugin_group: str, plugin_name: str):
@@ -65,7 +68,7 @@ def get_plugin_params(plugin_group: str, plugin_name: str):
         ImportError: If the plugin is not found in the specified group.
         ImportError: For any errors encountered while retrieving the plugin parameters.
     """
-    print(f"Getting plugin parameters for: {plugin_name} from group: {plugin_group}")
+    if not _QUIET: print(f"Getting plugin parameters for: {plugin_name} from group: {plugin_group}")
     try:
         # Filter entry points for the specified group using the new .select() method.
         group_entries = entry_points().select(group=plugin_group)
@@ -73,11 +76,11 @@ def get_plugin_params(plugin_group: str, plugin_name: str):
         entry_point = next(ep for ep in group_entries if ep.name == plugin_name)
         # Load the plugin class using the entry point's load method.
         plugin_class = entry_point.load()
-        print(f"Retrieved plugin params: {plugin_class.plugin_params}")
+        if not _QUIET: print(f"Retrieved plugin params: {plugin_class.plugin_params}")
         return plugin_class.plugin_params
     except StopIteration:
-        print(f"Failed to find plugin {plugin_name} in group {plugin_group}")
+        if not _QUIET: print(f"Failed to find plugin {plugin_name} in group {plugin_group}")
         raise ImportError(f"Plugin {plugin_name} not found in group {plugin_group}.")
     except Exception as e:
-        print(f"Failed to get plugin params for {plugin_name} from group {plugin_group}, Error: {e}")
+        if not _QUIET: print(f"Failed to get plugin params for {plugin_name} from group {plugin_group}, Error: {e}")
         raise ImportError(f"Failed to get plugin params for {plugin_name} from group {plugin_group}, Error: {e}")

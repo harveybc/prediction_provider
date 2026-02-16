@@ -8,6 +8,9 @@ This plugin extends the default pipeline to support:
 - Better integration with the RealFeederPlugin
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import time
 import json
 from datetime import datetime, timezone, timedelta
@@ -110,21 +113,21 @@ class EnhancedPipelinePlugin:
             predictor_plugin: An instance of the predictor plugin.
             feeder_plugin: An instance of the feeder plugin.
         """
-        print("Initializing enhanced pipeline...")
+        if not _QUIET: print("Initializing enhanced pipeline...")
         self.predictor_plugin = predictor_plugin
         self.feeder_plugin = feeder_plugin
         self._initialize_database()
         
         # Check if feeder supports custom date ranges
         if hasattr(self.feeder_plugin, 'fetch_data_for_period'):
-            print("✓ Feeder plugin supports custom date ranges")
+            if not _QUIET: print("✓ Feeder plugin supports custom date ranges")
         else:
-            print("⚠ Feeder plugin does not support custom date ranges")
+            if not _QUIET: print("⚠ Feeder plugin does not support custom date ranges")
         
         if self._validate_system():
-            print("Enhanced pipeline initialized successfully.")
+            if not _QUIET: print("Enhanced pipeline initialized successfully.")
         else:
-            print("Warning: Pipeline initialization incomplete.")
+            if not _QUIET: print("Warning: Pipeline initialization incomplete.")
 
     def _initialize_database(self):
         """
@@ -132,14 +135,14 @@ class EnhancedPipelinePlugin:
         """
         db_path = self.params.get("db_path")
         if not db_path:
-            print("Warning: DB path is not configured.")
+            if not _QUIET: print("Warning: DB path is not configured.")
             return
 
         try:
             self.engine = create_database_engine(f"sqlite:///{db_path}")
-            print(f"Database initialized at {db_path}")
+            if not _QUIET: print(f"Database initialized at {db_path}")
         except Exception as e:
-            print(f"Database initialization failed: {e}")
+            if not _QUIET: print(f"Database initialization failed: {e}")
             self.engine = None
 
     def _validate_system(self):
@@ -147,16 +150,16 @@ class EnhancedPipelinePlugin:
         Validate that all required components are available and configured.
         """
         if not self.params.get("pipeline_enabled", True):
-            print("Pipeline is disabled.")
+            if not _QUIET: print("Pipeline is disabled.")
             return False
         if not self.predictor_plugin:
-            print("Predictor plugin not available.")
+            if not _QUIET: print("Predictor plugin not available.")
             return False
         if not self.feeder_plugin:
-            print("Feeder plugin not available.")
+            if not _QUIET: print("Feeder plugin not available.")
             return False
         if not self.engine:
-            print("Database not connected.")
+            if not _QUIET: print("Database not connected.")
             return False
         return True
 
@@ -174,7 +177,7 @@ class EnhancedPipelinePlugin:
             session.commit()
             return new_prediction.id
         except Exception as e:
-            print(f"Failed to request prediction: {e}")
+            if not _QUIET: print(f"Failed to request prediction: {e}")
             session.rollback()
             return None
         finally:
@@ -193,7 +196,7 @@ class EnhancedPipelinePlugin:
             end_date = self.params.get("custom_end_date")
             
             if start_date and end_date:
-                print(f"Using custom date range: {start_date} to {end_date}")
+                if not _QUIET: print(f"Using custom date range: {start_date} to {end_date}")
                 return start_date, end_date, self.params.get("additional_previous_ticks", 50)
         
         # Calculate real-time or recent data range
@@ -209,7 +212,7 @@ class EnhancedPipelinePlugin:
         start_date_str = start_date.strftime('%Y-%m-%d %H:%M:%S')
         end_date_str = end_date.strftime('%Y-%m-%d %H:%M:%S')
         
-        print(f"Calculated date range: {start_date_str} to {end_date_str}")
+        if not _QUIET: print(f"Calculated date range: {start_date_str} to {end_date_str}")
         return start_date_str, end_date_str, self.params.get("additional_previous_ticks", 50)
 
     def _fetch_data_with_date_range(self):
@@ -225,10 +228,10 @@ class EnhancedPipelinePlugin:
                 # Calculate date range
                 start_date, end_date, additional_ticks = self._calculate_date_range()
                 
-                print(f"Fetching data with parameters:")
-                print(f"  Start: {start_date}")
-                print(f"  End: {end_date}")
-                print(f"  Additional ticks: {additional_ticks}")
+                if not _QUIET: print(f"Fetching data with parameters:")
+                if not _QUIET: print(f"  Start: {start_date}")
+                if not _QUIET: print(f"  End: {end_date}")
+                if not _QUIET: print(f"  Additional ticks: {additional_ticks}")
                 
                 # Fetch data for the specified period
                 input_df = self.feeder_plugin.fetch_data_for_period(
@@ -240,16 +243,16 @@ class EnhancedPipelinePlugin:
                 return input_df
             else:
                 # Fallback to standard fetch method
-                print("Feeder doesn't support date ranges, using standard fetch...")
+                if not _QUIET: print("Feeder doesn't support date ranges, using standard fetch...")
                 return self.feeder_plugin.fetch()
                 
         except Exception as e:
-            print(f"Error in enhanced data fetching: {e}")
+            if not _QUIET: print(f"Error in enhanced data fetching: {e}")
             # Fallback to standard fetch
             try:
                 return self.feeder_plugin.fetch()
             except Exception as fallback_e:
-                print(f"Fallback fetch also failed: {fallback_e}")
+                if not _QUIET: print(f"Fallback fetch also failed: {fallback_e}")
                 return None
 
     def _run_single_cycle(self, prediction_id):
@@ -257,40 +260,40 @@ class EnhancedPipelinePlugin:
         Execute a single prediction cycle for a given prediction ID.
         """
         if not self._validate_system():
-            print("Cannot run prediction cycle: system not properly initialized.")
+            if not _QUIET: print("Cannot run prediction cycle: system not properly initialized.")
             return
 
         try:
-            print(f"\n--- New enhanced prediction cycle started at {datetime.now(timezone.utc).isoformat()} ---")
+            if not _QUIET: print(f"\n--- New enhanced prediction cycle started at {datetime.now(timezone.utc).isoformat()} ---")
 
             # 1. Fetch data with enhanced date range support
-            print("Fetching data with enhanced date range support...")
+            if not _QUIET: print("Fetching data with enhanced date range support...")
             input_df = self._fetch_data_with_date_range()
 
             if input_df is None or input_df.empty:
-                print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
+                if not _QUIET: print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
                 self._update_prediction_status(prediction_id, 'failed')
                 return
 
-            print(f"Data fetched successfully. Shape: {input_df.shape}")
-            print(f"Date range: {input_df['DATE_TIME'].min()} to {input_df['DATE_TIME'].max()}")
+            if not _QUIET: print(f"Data fetched successfully. Shape: {input_df.shape}")
+            if not _QUIET: print(f"Date range: {input_df['DATE_TIME'].min()} to {input_df['DATE_TIME'].max()}")
 
             # 2. Make prediction
-            print("Making prediction...")
+            if not _QUIET: print("Making prediction...")
             prediction_output = self.predictor_plugin.predict_with_uncertainty(input_df)
 
             if not prediction_output:
-                print("Warning: Prediction failed. Skipping storage.")
+                if not _QUIET: print("Warning: Prediction failed. Skipping storage.")
                 self._update_prediction_status(prediction_id, 'failed')
                 return
 
-            print("Prediction successful.")
+            if not _QUIET: print("Prediction successful.")
 
             # 3. Store prediction
             self._store_prediction(prediction_id, prediction_output)
 
         except Exception as e:
-            print(f"An error occurred in the enhanced prediction pipeline: {e}")
+            if not _QUIET: print(f"An error occurred in the enhanced prediction pipeline: {e}")
             import traceback
             traceback.print_exc()
             self._update_prediction_status(prediction_id, 'failed')
@@ -300,16 +303,16 @@ class EnhancedPipelinePlugin:
         The main loop of the enhanced prediction pipeline.
         """
         if not self._validate_system():
-            print("Cannot run pipeline: system not properly initialized.")
+            if not _QUIET: print("Cannot run pipeline: system not properly initialized.")
             return
 
         self.running = True
-        print("Enhanced prediction pipeline started.")
-        print(f"Configuration:")
-        print(f"  Real-time mode: {self.params.get('real_time_mode', True)}")
-        print(f"  Data lookback: {self.params.get('data_lookback_hours', 720)} hours")
-        print(f"  Prediction interval: {self.params.get('prediction_interval', 300)} seconds")
-        print(f"  Additional ticks: {self.params.get('additional_previous_ticks', 50)}")
+        if not _QUIET: print("Enhanced prediction pipeline started.")
+        if not _QUIET: print(f"Configuration:")
+        if not _QUIET: print(f"  Real-time mode: {self.params.get('real_time_mode', True)}")
+        if not _QUIET: print(f"  Data lookback: {self.params.get('data_lookback_hours', 720)} hours")
+        if not _QUIET: print(f"  Prediction interval: {self.params.get('prediction_interval', 300)} seconds")
+        if not _QUIET: print(f"  Additional ticks: {self.params.get('additional_previous_ticks', 50)}")
 
         while self.running:
             prediction_id = self.request_prediction()
@@ -318,7 +321,7 @@ class EnhancedPipelinePlugin:
             
             # Wait for the next interval
             interval = self.params.get("prediction_interval", 300)
-            print(f"--- Cycle finished. Waiting for {interval} seconds... ---")
+            if not _QUIET: print(f"--- Cycle finished. Waiting for {interval} seconds... ---")
             time.sleep(interval)
 
     def _update_prediction_status(self, prediction_id, status):
@@ -334,7 +337,7 @@ class EnhancedPipelinePlugin:
                 prediction.status = status
                 session.commit()
         except Exception as e:
-            print(f"Failed to update prediction status: {e}")
+            if not _QUIET: print(f"Failed to update prediction status: {e}")
             session.rollback()
         finally:
             session.close()
@@ -344,7 +347,7 @@ class EnhancedPipelinePlugin:
         Store the prediction output in the database for a given prediction ID.
         """
         if not self.engine:
-            print("Cannot store prediction: database not connected.")
+            if not _QUIET: print("Cannot store prediction: database not connected.")
             self._update_prediction_status(prediction_id, 'failed')
             return
 
@@ -355,13 +358,13 @@ class EnhancedPipelinePlugin:
                 prediction.prediction_data = prediction_output
                 prediction.status = 'completed'
                 session.commit()
-                print(f"Successfully stored prediction for ID: {prediction_id}")
+                if not _QUIET: print(f"Successfully stored prediction for ID: {prediction_id}")
             else:
-                print(f"Prediction with ID {prediction_id} not found.")
+                if not _QUIET: print(f"Prediction with ID {prediction_id} not found.")
                 self._update_prediction_status(prediction_id, 'failed')
 
         except Exception as e:
-            print(f"Failed to store prediction: {e}")
+            if not _QUIET: print(f"Failed to store prediction: {e}")
             session.rollback()
             self._update_prediction_status(prediction_id, 'failed')
         finally:
@@ -393,7 +396,7 @@ class EnhancedPipelinePlugin:
         Cleanup pipeline resources.
         """
         self.stop()
-        print("Enhanced pipeline cleanup completed")
+        if not _QUIET: print("Enhanced pipeline cleanup completed")
 
     # New methods for enhanced functionality
     
@@ -408,7 +411,7 @@ class EnhancedPipelinePlugin:
         self.params['use_custom_date_range'] = True
         self.params['custom_start_date'] = start_date
         self.params['custom_end_date'] = end_date
-        print(f"Custom date range set: {start_date} to {end_date}")
+        if not _QUIET: print(f"Custom date range set: {start_date} to {end_date}")
     
     def enable_real_time_mode(self, lookback_hours: int = 720):
         """
@@ -420,7 +423,7 @@ class EnhancedPipelinePlugin:
         self.params['real_time_mode'] = True
         self.params['use_custom_date_range'] = False
         self.params['data_lookback_hours'] = lookback_hours
-        print(f"Real-time mode enabled with {lookback_hours} hours lookback")
+        if not _QUIET: print(f"Real-time mode enabled with {lookback_hours} hours lookback")
     
     def run_single_prediction(self, start_date: str = None, end_date: str = None):
         """

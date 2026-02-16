@@ -3,6 +3,9 @@
 Technical Indicators Calculator Module
 
 This module provides exact replication of technical indicators calculations
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 from the feature-eng repository using pandas_ta library.
 """
 
@@ -160,14 +163,14 @@ class TechnicalIndicatorCalculator:
         normality_score_log = abs(skewness_log) + abs(kurtosis_log)
         
         if normality_score_log < normality_score_original:
-            print(f"[DEBUG] Using log-transformed data for {indicator_name} (improved normality).")
-            print(f"[DEBUG] Original normality score: {normality_score_original:.6f}")
-            print(f"[DEBUG] Log normality score: {normality_score_log:.6f}")
+            if not _QUIET: print(f"[DEBUG] Using log-transformed data for {indicator_name} (improved normality).")
+            if not _QUIET: print(f"[DEBUG] Original normality score: {normality_score_original:.6f}")
+            if not _QUIET: print(f"[DEBUG] Log normality score: {normality_score_log:.6f}")
             return log_transformed_data
         else:
-            print(f"[DEBUG] Using original data for {indicator_name} (log transform did not improve normality).")
-            print(f"[DEBUG] Original normality score: {normality_score_original:.6f}")
-            print(f"[DEBUG] Log normality score: {normality_score_log:.6f}")
+            if not _QUIET: print(f"[DEBUG] Using original data for {indicator_name} (log transform did not improve normality).")
+            if not _QUIET: print(f"[DEBUG] Original normality score: {normality_score_original:.6f}")
+            if not _QUIET: print(f"[DEBUG] Log normality score: {normality_score_log:.6f}")
             return data
     
     def _calculate_indicator(self, indicator: str, ohlc_data: pd.DataFrame) -> Dict[str, pd.Series]:

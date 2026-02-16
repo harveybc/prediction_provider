@@ -1,3 +1,6 @@
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import backtrader as bt
 import pandas as pd
 import datetime
@@ -93,7 +96,7 @@ def main():
     random.seed(42)
     population = toolbox.population(n=20)
     CXPB, MUTPB, NGEN = 0.5, 0.2, 100  # Crossover prob, mutation prob, number of generations
-    print("Starting Genetic Algorithm Optimization")
+    if not _QUIET: print("Starting Genetic Algorithm Optimization")
     
     # Optionally use multiprocessing
     pool = multiprocessing.Pool()
@@ -103,7 +106,7 @@ def main():
     fitnesses = list(map(toolbox.evaluate, population))
     for ind, fit in zip(population, fitnesses):
         ind.fitness.values = fit
-    print("  Evaluated %i individuals" % len(population))
+    if not _QUIET: print("  Evaluated %i individuals" % len(population))
     
     for gen in range(1, NGEN + 1):
         offspring = toolbox.select(population, len(population))
@@ -127,17 +130,17 @@ def main():
         
         population[:] = offspring
         fits = [ind.fitness.values[0] for ind in population]
-        print(f"Generation {gen}: Max Profit = {max(fits):.2f}, Avg Profit = {sum(fits)/len(fits):.2f}")
+        if not _QUIET: print(f"Generation {gen}: Max Profit = {max(fits):.2f}, Avg Profit = {sum(fits)/len(fits):.2f}")
     
     best_ind = tools.selBest(population, 1)[0]
-    print("Best parameter set found:")
-    print(f"  profit_threshold = {best_ind[0]:.2f}")
-    print(f"  tp_multiplier    = {best_ind[1]:.2f}")
-    print(f"  sl_multiplier    = {best_ind[2]:.2f}")
-    print(f"  rel_volume       = {best_ind[3]:.3f}")
-    print(f"  lower_rr_thresh  = {best_ind[4]:.2f}")
-    print(f"  upper_rr_thresh  = {best_ind[5]:.2f}")
-    print("With profit: {:.2f}".format(best_ind.fitness.values[0]))
+    if not _QUIET: print("Best parameter set found:")
+    if not _QUIET: print(f"  profit_threshold = {best_ind[0]:.2f}")
+    if not _QUIET: print(f"  tp_multiplier    = {best_ind[1]:.2f}")
+    if not _QUIET: print(f"  sl_multiplier    = {best_ind[2]:.2f}")
+    if not _QUIET: print(f"  rel_volume       = {best_ind[3]:.3f}")
+    if not _QUIET: print(f"  lower_rr_thresh  = {best_ind[4]:.2f}")
+    if not _QUIET: print(f"  upper_rr_thresh  = {best_ind[5]:.2f}")
+    if not _QUIET: print("With profit: {:.2f}".format(best_ind.fitness.values[0]))
     
     pool.close()
 

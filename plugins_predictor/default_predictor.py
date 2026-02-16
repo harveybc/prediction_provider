@@ -6,6 +6,9 @@ This plugin handles model loading, prediction, and evaluation for the Prediction
 It supports loading Keras models and making predictions with uncertainty estimation.
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -125,7 +128,7 @@ class DefaultPredictor:
                         else:
                             tf.config.experimental.set_memory_growth(gpu, True)
                 except RuntimeError as e:
-                    print(f"GPU configuration error: {e}")
+                    if not _QUIET: print(f"GPU configuration error: {e}")
         
         # Configure mixed precision if enabled
         if self.params.get("enable_mixed_precision", False):
@@ -138,16 +141,16 @@ class DefaultPredictor:
         """
         path = self.params.get("normalization_params_path")
         if not path or not os.path.exists(path):
-            print(f"Warning: Normalization params file not found at {path}. De-normalization will be skipped.")
+            if not _QUIET: print(f"Warning: Normalization params file not found at {path}. De-normalization will be skipped.")
             self.normalization_params = None
             return
 
         try:
             with open(path, 'r') as f:
                 self.normalization_params = json.load(f)
-            print(f"Normalization parameters loaded successfully from {path}")
+            if not _QUIET: print(f"Normalization parameters loaded successfully from {path}")
         except Exception as e:
-            print(f"Failed to load or parse normalization parameters from {path}: {e}")
+            if not _QUIET: print(f"Failed to load or parse normalization parameters from {path}: {e}")
             self.normalization_params = None
 
     def load_model(self, model_path=None):
@@ -172,7 +175,7 @@ class DefaultPredictor:
         # Check if model is already in cache
         if model_path in self.model_cache:
             self.model = self.model_cache[model_path]
-            print(f"Model loaded from cache: {model_path}")
+            if not _QUIET: print(f"Model loaded from cache: {model_path}")
             return True
         
         try:
@@ -196,11 +199,11 @@ class DefaultPredictor:
             # Load normalization parameters
             self._load_normalization_params()
 
-            print(f"Model loaded successfully: {model_path}")
+            if not _QUIET: print(f"Model loaded successfully: {model_path}")
             return True
             
         except Exception as e:
-            print(f"Failed to load model from {model_path}: {str(e)}")
+            if not _QUIET: print(f"Failed to load model from {model_path}: {str(e)}")
             self.model = None
             return False
     
@@ -279,9 +282,9 @@ class DefaultPredictor:
             try:
                 with open(metadata_path, 'r') as f:
                     self.model_metadata = json.load(f)
-                print(f"Model metadata loaded: {metadata_path}")
+                if not _QUIET: print(f"Model metadata loaded: {metadata_path}")
             except Exception as e:
-                print(f"Failed to load model metadata: {e}")
+                if not _QUIET: print(f"Failed to load model metadata: {e}")
                 self.model_metadata = {}
         else:
             self.model_metadata = {}
@@ -397,7 +400,7 @@ class DefaultPredictor:
         target_col = self.params.get("prediction_target_column", "close_price")
 
         if self.normalization_params is None or target_col not in self.normalization_params:
-            print("Warning: Normalization parameters not available for target column. Skipping de-normalization.")
+            if not _QUIET: print("Warning: Normalization parameters not available for target column. Skipping de-normalization.")
             return predictions, uncertainties
 
         stats = self.normalization_params[target_col]
@@ -405,7 +408,7 @@ class DefaultPredictor:
         std = stats.get('std', 1)
 
         if std == 0:
-            print("Warning: Standard deviation is zero. Cannot de-normalize.")
+            if not _QUIET: print("Warning: Standard deviation is zero. Cannot de-normalize.")
             return predictions, uncertainties
 
         # De-normalize predictions: value * std + mean
@@ -489,7 +492,7 @@ class DefaultPredictor:
             
         except Exception as e:
             # Fallback to regular prediction if uncertainty estimation fails
-            print(f"Uncertainty estimation failed, using regular prediction: {str(e)}")
+            if not _QUIET: print(f"Uncertainty estimation failed, using regular prediction: {str(e)}")
             predictions = self.predict(input_data)
             uncertainties = np.zeros_like(predictions)
 

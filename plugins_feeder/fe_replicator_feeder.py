@@ -6,6 +6,9 @@ This plugin replicates the exact feature engineering process from the feature-en
 using the exported FE configuration for perfect parameter matching.
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import os
 import sys
 import numpy as np
@@ -56,8 +59,8 @@ class FeReplicatorFeeder:
         with open(full_path, 'r') as f:
             self.fe_config = json.load(f)
             
-        print(f"[FE_REPLICATOR] ✅ Loaded FE config from: {full_path}")
-        print(f"[FE_REPLICATOR] Config version: {self.fe_config['version_info']['config_version']}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Loaded FE config from: {full_path}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Config version: {self.fe_config['version_info']['config_version']}")
         
         return self.fe_config
     
@@ -79,7 +82,7 @@ class FeReplicatorFeeder:
             if self.fe_config:
                 self._apply_fe_config_to_plugins()
                 
-            print("[FE_REPLICATOR] ✅ Feature-eng environment setup complete")
+            if not _QUIET: print("[FE_REPLICATOR] ✅ Feature-eng environment setup complete")
             
         except Exception as e:
             raise ImportError(f"Failed to import feature-eng modules: {e}")
@@ -104,13 +107,13 @@ class FeReplicatorFeeder:
             if hasattr(self.tech_indicator_plugin, 'params'):
                 self.tech_indicator_plugin.params[param] = value
         
-        print(f"[FE_REPLICATOR] ✅ Applied tech indicator config: {len(tech_params)} parameters")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Applied tech indicator config: {len(tech_params)} parameters")
         
         # Create decomposition processor with FE config
         decomp_params = self.fe_config['decomposition_params']
         self.decomp_processor = self._create_decomp_processor(decomp_params)
         
-        print(f"[FE_REPLICATOR] ✅ Applied decomposition config: {len(decomp_params)} parameters")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Applied decomposition config: {len(decomp_params)} parameters")
     
     def _create_decomp_processor(self, decomp_params: Dict[str, Any]):
         """Create decomposition processor with FE config parameters."""
@@ -121,7 +124,7 @@ class FeReplicatorFeeder:
         decomp_params_copy['keep_original'] = True
         decomp_params_copy['replace_original'] = False
         
-        print(f"[FE_REPLICATOR] ✅ Using identical decomposition settings as feature-eng")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Using identical decomposition settings as feature-eng")
         
         processor = DecompositionPostProcessor(decomp_params_copy)
         
@@ -143,8 +146,8 @@ class FeReplicatorFeeder:
         # Get the first N rows (same as feature-eng)
         first_rows = df.head(num_rows).copy()
         
-        print(f"[FE_REPLICATOR] ✅ Loaded first {len(first_rows)} rows from: {csv_path}")
-        print(f"[FE_REPLICATOR] Date range: {first_rows.iloc[0]['datetime']} to {first_rows.iloc[-1]['datetime']}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Loaded first {len(first_rows)} rows from: {csv_path}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Date range: {first_rows.iloc[0]['datetime']} to {first_rows.iloc[-1]['datetime']}")
         
         return first_rows
     
@@ -160,7 +163,7 @@ class FeReplicatorFeeder:
             if not missing_features or 'CLOSE' not in data.columns:
                 return data
             
-            print(f"[FE_REPLICATOR] Adding missing wavelet features: {missing_features}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Adding missing wavelet features: {missing_features}")
             
             # Extract CLOSE series for decomposition
             close_series = data['CLOSE'].values
@@ -184,7 +187,7 @@ class FeReplicatorFeeder:
                         # Normalize using mean and std like feature-eng
                         normalized = (detail_coeffs - detail_coeffs.mean()) / detail_coeffs.std()
                         data[feature_name] = normalized.astype(np.float32)
-                        print(f"[FE_REPLICATOR] ✅ Added {feature_name}")
+                        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Added {feature_name}")
             
             # Extract final approximation coefficients
             feature_name = f'CLOSE_wav_approx_L{wavelet_levels}'
@@ -194,12 +197,12 @@ class FeReplicatorFeeder:
                     # Normalize using mean and std like feature-eng
                     normalized = (approx_coeffs - approx_coeffs.mean()) / approx_coeffs.std()
                     data[feature_name] = normalized.astype(np.float32)
-                    print(f"[FE_REPLICATOR] ✅ Added {feature_name}")
+                    if not _QUIET: print(f"[FE_REPLICATOR] ✅ Added {feature_name}")
             
             return data
             
         except Exception as e:
-            print(f"[FE_REPLICATOR] ❌ Failed to add wavelet features: {e}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ❌ Failed to add wavelet features: {e}")
             return data
     
     def _calculate_tech_indicators_exact_fe_way(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -207,8 +210,8 @@ class FeReplicatorFeeder:
         import pandas_ta as ta
         
         # Debug column names
-        print(f"[DEBUG] Input data columns: {data.columns.tolist()}")
-        print(f"[DEBUG] Input data shape: {data.shape}")
+        if not _QUIET: print(f"[DEBUG] Input data columns: {data.columns.tolist()}")
+        if not _QUIET: print(f"[DEBUG] Input data shape: {data.shape}")
         
         # Ensure we have the right column names (same as feature-eng expects)
         if 'Open' in data.columns:
@@ -246,7 +249,7 @@ class FeReplicatorFeeder:
         if not all([close_col, high_col, low_col, open_col]):
             raise ValueError(f"Missing required OHLC columns. Available: {data.columns.tolist()}")
         
-        print(f"[DEBUG] Using columns: Open={open_col}, High={high_col}, Low={low_col}, Close={close_col}")
+        if not _QUIET: print(f"[DEBUG] Using columns: Open={open_col}, High={high_col}, Low={low_col}, Close={close_col}")
         
         # Create technical indicators dict exactly like feature-eng does
         technical_indicators = {}
@@ -259,7 +262,7 @@ class FeReplicatorFeeder:
                 rsi = ta.rsi(data[close_col])  # Default length is 14
                 if rsi is not None:
                     technical_indicators['RSI'] = rsi
-                    print(f"[DEBUG] RSI calculated: {rsi.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] RSI calculated: {rsi.iloc[:3].tolist()}")
 
             elif indicator == 'macd':
                 macd = ta.macd(data[close_col])  # Default fast, slow, signal periods
@@ -267,20 +270,20 @@ class FeReplicatorFeeder:
                     technical_indicators['MACD'] = macd['MACD_12_26_9']
                     technical_indicators['MACD_Histogram'] = macd['MACDh_12_26_9']
                     technical_indicators['MACD_Signal'] = macd['MACDs_12_26_9']
-                    print(f"[DEBUG] MACD calculated: {macd['MACD_12_26_9'].iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] MACD calculated: {macd['MACD_12_26_9'].iloc[:3].tolist()}")
 
             elif indicator == 'ema':
                 ema = ta.ema(data[close_col])  # Default length is 20
                 if ema is not None:
                     technical_indicators['EMA'] = ema
-                    print(f"[DEBUG] EMA calculated: {ema.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] EMA calculated: {ema.iloc[:3].tolist()}")
 
             elif indicator == 'stoch':
                 stoch = ta.stoch(data[high_col], data[low_col], data[close_col])  # Default %K, %D values
                 if 'STOCHk_14_3_3' in stoch.columns:
                     technical_indicators['Stochastic_%K'] = stoch['STOCHk_14_3_3']
                     technical_indicators['Stochastic_%D'] = stoch['STOCHd_14_3_3']
-                    print(f"[DEBUG] Stochastic calculated: %K={stoch['STOCHk_14_3_3'].iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] Stochastic calculated: %K={stoch['STOCHk_14_3_3'].iloc[:3].tolist()}")
 
             elif indicator == 'adx':
                 adx = ta.adx(data[high_col], data[low_col], data[close_col])  # Default length is 14
@@ -288,43 +291,43 @@ class FeReplicatorFeeder:
                     technical_indicators['ADX'] = adx['ADX_14']
                     technical_indicators['DI+'] = adx['DMP_14']
                     technical_indicators['DI-'] = adx['DMN_14']
-                    print(f"[DEBUG] ADX calculated: {adx['ADX_14'].iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] ADX calculated: {adx['ADX_14'].iloc[:3].tolist()}")
 
             elif indicator == 'atr':
                 atr = ta.atr(data[high_col], data[low_col], data[close_col])  # Default length is 14
                 if atr is not None:
                     technical_indicators['ATR'] = atr
-                    print(f"[DEBUG] ATR calculated: {atr.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] ATR calculated: {atr.iloc[:3].tolist()}")
 
             elif indicator == 'cci':
                 cci = ta.cci(data[high_col], data[low_col], data[close_col])  # Default length is 20
                 if cci is not None:
                     technical_indicators['CCI'] = cci
-                    print(f"[DEBUG] CCI calculated: {cci.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] CCI calculated: {cci.iloc[:3].tolist()}")
 
             elif indicator == 'bbands':
                 bbands = ta.bbands(data[close_col])  # Default length is 20
                 if bbands is not None and len(bbands.columns) >= 5:
                     # Just use bbands data but don't add to main indicators for now
-                    print(f"[DEBUG] BBands calculated with columns: {bbands.columns.tolist()}")
+                    if not _QUIET: print(f"[DEBUG] BBands calculated with columns: {bbands.columns.tolist()}")
 
             elif indicator == 'williams':
                 williams = ta.willr(data[high_col], data[low_col], data[close_col])  # Default length is 14
                 if williams is not None:
                     technical_indicators['WilliamsR'] = williams
-                    print(f"[DEBUG] Williams %R calculated: {williams.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] Williams %R calculated: {williams.iloc[:3].tolist()}")
 
             elif indicator == 'momentum':
                 momentum = ta.mom(data[close_col])  # Default length is 10
                 if momentum is not None:
                     technical_indicators['Momentum'] = momentum
-                    print(f"[DEBUG] Momentum calculated: {momentum.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] Momentum calculated: {momentum.iloc[:3].tolist()}")
 
             elif indicator == 'roc':
                 roc = ta.roc(data[close_col])  # Default length is 10
                 if roc is not None:
                     technical_indicators['ROC'] = roc
-                    print(f"[DEBUG] ROC calculated: {roc.iloc[:3].tolist()}")
+                    if not _QUIET: print(f"[DEBUG] ROC calculated: {roc.iloc[:3].tolist()}")
         
         # Convert to DataFrame
         tech_df = pd.DataFrame(technical_indicators, index=data.index)
@@ -334,22 +337,22 @@ class FeReplicatorFeeder:
         
         # Apply EXACT same NaN handling as feature-eng: fill with column mean
         # This is the critical step that eliminates NaNs just like feature-eng does
-        print(f"[DEBUG] Before NaN filling: {tech_df.isnull().sum().sum()} NaN values")
+        if not _QUIET: print(f"[DEBUG] Before NaN filling: {tech_df.isnull().sum().sum()} NaN values")
         for column in tech_df.columns:
             if tech_df[column].isnull().any():
                 original_nan_count = tech_df[column].isnull().sum()
                 tech_df[column] = tech_df[column].fillna(tech_df[column].mean())
-                print(f"[DEBUG] Filled {original_nan_count} NaN values in {column} with mean: {tech_df[column].mean():.4f}")
+                if not _QUIET: print(f"[DEBUG] Filled {original_nan_count} NaN values in {column} with mean: {tech_df[column].mean():.4f}")
         
-        print(f"[DEBUG] After NaN filling: {tech_df.isnull().sum().sum()} NaN values")
-        print(f"[DEBUG] Result columns: {tech_df.columns.tolist()}")
-        print(f"[DEBUG] Result shape: {tech_df.shape}")
+        if not _QUIET: print(f"[DEBUG] After NaN filling: {tech_df.isnull().sum().sum()} NaN values")
+        if not _QUIET: print(f"[DEBUG] Result columns: {tech_df.columns.tolist()}")
+        if not _QUIET: print(f"[DEBUG] Result shape: {tech_df.shape}")
         
         return tech_df
     
     def process_data_with_fe_pipeline(self, data: pd.DataFrame) -> pd.DataFrame:
         """Process data using the exact same pipeline as feature-eng."""
-        print("[FE_REPLICATOR] Starting FE pipeline replication...")
+        if not _QUIET: print("[FE_REPLICATOR] Starting FE pipeline replication...")
         
         # Step 1: Prepare data (same as feature-eng data_processor.py)
         processed_data = self._prepare_data_like_feature_eng(data)
@@ -374,25 +377,25 @@ class FeReplicatorFeeder:
         # Step 2: Apply tech indicators using exact same method as feature-eng
         # Direct replication of feature-eng's calculation (bypassing parameter configuration)
         tech_data = self._calculate_tech_indicators_exact_fe_way(processed_data)
-        print(f"[FE_REPLICATOR] ✅ Tech indicators applied: {tech_data.shape}")
-        print(f"[FE_REPLICATOR] Tech indicator columns: {list(tech_data.columns)}")
-        print(f"[FE_REPLICATOR] ✅ Tech indicators applied: {tech_data.shape}")
-        print(f"[FE_REPLICATOR] Tech indicator columns: {list(tech_data.columns)}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Tech indicators applied: {tech_data.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Tech indicator columns: {list(tech_data.columns)}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Tech indicators applied: {tech_data.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Tech indicator columns: {list(tech_data.columns)}")
         
         # Step 3: Apply EXACT variability analysis transformations from full dataset analysis
         # Use pre-determined log transformation decisions to match feature-eng exactly
         transformed_data = self._apply_predefined_transformations(tech_data)
-        print(f"[FE_REPLICATOR] ✅ Applied pre-determined transformations: {transformed_data.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Applied pre-determined transformations: {transformed_data.shape}")
         
         # Step 4: Process additional datasets like feature-eng does (pass prepared data with OHLC columns)
         # Use the properly prepared data with datetime index for additional processing
         additional_features = self._process_additional_datasets(prepared_data_with_index)
-        print(f"[FE_REPLICATOR] ✅ Additional features processed: {additional_features.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Additional features processed: {additional_features.shape}")
         
         # Step 5: Combine technical indicators with additional features
         if self.fe_config['processing_params']['tech_indicators']:
             combined_data = pd.concat([transformed_data, additional_features], axis=1)
-            print(f"[FE_REPLICATOR] ✅ Combined data shape: {combined_data.shape}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ✅ Combined data shape: {combined_data.shape}")
         else:
             combined_data = additional_features
         
@@ -402,28 +405,28 @@ class FeReplicatorFeeder:
             # Add original CLOSE column back for decomposition
             if 'CLOSE' in processed_data.columns:
                 combined_data['CLOSE'] = processed_data['CLOSE']
-                print(f"[FE_REPLICATOR] ✅ Added original CLOSE column for decomposition")
+                if not _QUIET: print(f"[FE_REPLICATOR] ✅ Added original CLOSE column for decomposition")
         
         # Step 7: Apply decomposition post-processing if configured
         if decomp_features:
-            print(f"[FE_REPLICATOR] Applying decomposition to features: {decomp_features}")
-            print(f"[FE_REPLICATOR] Available columns for decomposition: {list(combined_data.columns)}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Applying decomposition to features: {decomp_features}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Available columns for decomposition: {list(combined_data.columns)}")
             decomp_data = self.decomp_processor.process_features(combined_data)
-            print(f"[FE_REPLICATOR] ✅ Decomposition applied: {decomp_data.shape}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ✅ Decomposition applied: {decomp_data.shape}")
             final_data = decomp_data
         else:
             final_data = combined_data
         
         # Step 7.5: Ensure wavelet features are present (add if missing)
         final_data = self._add_wavelet_features_if_missing(final_data)
-        print(f"[FE_REPLICATOR] ✅ Wavelet features ensured: {final_data.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Wavelet features ensured: {final_data.shape}")
         
         # Step 7.6: Remove duplicate columns (e.g., OPEN.1, HIGH.1, LOW.1, CLOSE.1)
         duplicate_columns = [col for col in final_data.columns if col.endswith('.1')]
         if duplicate_columns:
-            print(f"[FE_REPLICATOR] Removing duplicate columns: {duplicate_columns}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Removing duplicate columns: {duplicate_columns}")
             final_data = final_data.drop(columns=duplicate_columns)
-            print(f"[FE_REPLICATOR] ✅ Duplicate columns removed: {final_data.shape}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ✅ Duplicate columns removed: {final_data.shape}")
         
         # Step 8: Reorder columns to match feature-eng exactly 
         expected_column_order = ['DATE_TIME', 'RSI', 'MACD', 'MACD_Histogram', 'MACD_Signal', 'EMA', 'Stochastic_%K', 'Stochastic_%D', 'ADX', 'DI+', 'DI-', 'ATR', 'CCI', 'WilliamsR', 'Momentum', 'ROC', 'OPEN', 'HIGH', 'LOW', 'BC-BO', 'BH-BL', 'BH-BO', 'BO-BL', 'S&P500_Close', 'vix_close', 'CLOSE_15m_tick_1', 'CLOSE_15m_tick_2', 'CLOSE_15m_tick_3', 'CLOSE_15m_tick_4', 'CLOSE_15m_tick_5', 'CLOSE_15m_tick_6', 'CLOSE_15m_tick_7', 'CLOSE_15m_tick_8', 'CLOSE_30m_tick_1', 'CLOSE_30m_tick_2', 'CLOSE_30m_tick_3', 'CLOSE_30m_tick_4', 'CLOSE_30m_tick_5', 'CLOSE_30m_tick_6', 'CLOSE_30m_tick_7', 'CLOSE_30m_tick_8', 'day_of_month', 'hour_of_day', 'day_of_week', 'CLOSE_stl_trend', 'CLOSE_stl_seasonal', 'CLOSE_stl_resid', 'CLOSE_wav_detail_L1', 'CLOSE_wav_detail_L2', 'CLOSE_wav_approx_L2', 'CLOSE_mtm_band_1_0.000_0.010', 'CLOSE_mtm_band_2_0.010_0.060', 'CLOSE_mtm_band_3_0.060_0.200', 'CLOSE_mtm_band_4_0.200_0.500', 'CLOSE']
@@ -435,13 +438,13 @@ class FeReplicatorFeeder:
         available_columns = [col for col in expected_column_order if col in final_data.columns]
         final_data = final_data[available_columns]
         
-        print(f"[FE_REPLICATOR] ✅ Reordered columns to match feature-eng output")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Reordered columns to match feature-eng output")
             
         return final_data
     
     def _apply_predefined_transformations(self, data: pd.DataFrame) -> pd.DataFrame:
         """Apply exact same transformations as feature-eng full dataset analysis."""
-        print("[FE_REPLICATOR] Applying pre-determined log transformations...")
+        if not _QUIET: print("[FE_REPLICATOR] Applying pre-determined log transformations...")
         
         # Based on feature-eng full dataset analysis (93084 rows):
         # These indicators get log-transformed to improve normality
@@ -483,11 +486,11 @@ class FeReplicatorFeeder:
                 
                 log_transformed = np.log(shifted_values)
                 transformed_data[indicator] = log_transformed
-                print(f"[FE_REPLICATOR] Applied log transformation to {indicator}")
+                if not _QUIET: print(f"[FE_REPLICATOR] Applied log transformation to {indicator}")
         
-        print(f"[FE_REPLICATOR] Transformation summary:")
-        print(f"  - Log transformed: {log_transform_indicators}")
-        print(f"  - Kept original: {keep_original_indicators}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Transformation summary:")
+        if not _QUIET: print(f"  - Log transformed: {log_transform_indicators}")
+        if not _QUIET: print(f"  - Kept original: {keep_original_indicators}")
         
         return transformed_data
 
@@ -508,21 +511,21 @@ class FeReplicatorFeeder:
     
     def _process_additional_datasets(self, prepared_data: pd.DataFrame) -> pd.DataFrame:
         """Process additional datasets exactly like feature-eng does"""
-        print("[FE_REPLICATOR] Processing additional datasets...")
-        print(f"[DEBUG] Starting process_additional_datasets...")
-        print(f"[DEBUG] prepared_data columns: {list(prepared_data.columns)}")
-        print(f"[DEBUG] prepared_data shape: {prepared_data.shape}")
+        if not _QUIET: print("[FE_REPLICATOR] Processing additional datasets...")
+        if not _QUIET: print(f"[DEBUG] Starting process_additional_datasets...")
+        if not _QUIET: print(f"[DEBUG] prepared_data columns: {list(prepared_data.columns)}")
+        if not _QUIET: print(f"[DEBUG] prepared_data shape: {prepared_data.shape}")
         
         # Set the DATE_TIME index (like feature-eng expects)
         data_for_processing = prepared_data.copy()
         if 'DATE_TIME' in data_for_processing.columns:
             data_for_processing['DATE_TIME'] = pd.to_datetime(data_for_processing['DATE_TIME'])
             data_for_processing.set_index('DATE_TIME', inplace=True)
-            print(f"[DEBUG] Set DATE_TIME index, range: {data_for_processing.index.min()} to {data_for_processing.index.max()}")
+            if not _QUIET: print(f"[DEBUG] Set DATE_TIME index, range: {data_for_processing.index.min()} to {data_for_processing.index.max()}")
         
-        print(f"[DEBUG] Data for processing columns: {list(data_for_processing.columns)}")
-        print(f"[DEBUG] Data for processing first 5 rows:")
-        print(data_for_processing.head())
+        if not _QUIET: print(f"[DEBUG] Data for processing columns: {list(data_for_processing.columns)}")
+        if not _QUIET: print(f"[DEBUG] Data for processing first 5 rows:")
+        if not _QUIET: print(data_for_processing.head())
         
         # Create complete config for additional datasets processing
         config = self.fe_config['processing_params'].copy()
@@ -538,7 +541,7 @@ class FeReplicatorFeeder:
             additional_features, _, _ = self.tech_indicator_plugin.process_additional_datasets(data_for_processing, config)
             return additional_features
         except Exception as e:
-            print(f"[FE_REPLICATOR] ❌ Error in additional datasets: {e}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ❌ Error in additional datasets: {e}")
             import traceback
             traceback.print_exc()
             # Return empty DataFrame with same index if processing fails
@@ -575,8 +578,8 @@ class FeReplicatorFeeder:
             # Select only OHLC columns for processing (same as feature-eng)
             if ohlc_columns:
                 numeric_data = data[ohlc_columns].apply(pd.to_numeric, errors='coerce').fillna(0)
-                print(f"[FE_REPLICATOR] ✅ Prepared OHLC data: {numeric_data.shape}")
-                print(f"[FE_REPLICATOR] OHLC columns: {ohlc_columns}")
+                if not _QUIET: print(f"[FE_REPLICATOR] ✅ Prepared OHLC data: {numeric_data.shape}")
+                if not _QUIET: print(f"[FE_REPLICATOR] OHLC columns: {ohlc_columns}")
                 return numeric_data
         
         # Fallback to standard column names
@@ -584,11 +587,11 @@ class FeReplicatorFeeder:
         available_cols = [col for col in standard_cols if col in data.columns]
         if available_cols:
             numeric_data = data[available_cols].apply(pd.to_numeric, errors='coerce').fillna(0)
-            print(f"[FE_REPLICATOR] ✅ Prepared OHLC data (fallback): {numeric_data.shape}")
-            print(f"[FE_REPLICATOR] Available columns: {available_cols}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ✅ Prepared OHLC data (fallback): {numeric_data.shape}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Available columns: {available_cols}")
             return numeric_data
         
-        print(f"[FE_REPLICATOR] Available columns in data: {list(data.columns)}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Available columns in data: {list(data.columns)}")
         raise ValueError("Unable to identify OHLC columns in the data")
     
     def save_processed_data(self, data: pd.DataFrame, output_path: str) -> str:
@@ -601,20 +604,20 @@ class FeReplicatorFeeder:
             
         data_to_save.to_csv(output_path, index=False)
         
-        print(f"[FE_REPLICATOR] ✅ Saved processed data: {output_path}")
-        print(f"[FE_REPLICATOR] Output shape: {data_to_save.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] ✅ Saved processed data: {output_path}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Output shape: {data_to_save.shape}")
         
         return output_path
     
     def compare_with_feature_eng_output(self, replicated_data: pd.DataFrame, num_rows: int = 1000) -> Dict[str, Any]:
         """Compare replicated output with feature-eng output for exact matching."""
-        print("[FE_REPLICATOR] Starting exact comparison...")
+        if not _QUIET: print("[FE_REPLICATOR] Starting exact comparison...")
         
         # Calculate maximum window size needed for all decomposition methods
         # Based on the configuration parameters
         max_window_size = self._calculate_max_window_size()
-        print(f"[FE_REPLICATOR] Maximum window size for all methods: {max_window_size}")
-        print(f"[FE_REPLICATOR] Skipping first {max_window_size} rows to compare only valid calculated values")
+        if not _QUIET: print(f"[FE_REPLICATOR] Maximum window size for all methods: {max_window_size}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Skipping first {max_window_size} rows to compare only valid calculated values")
         
         # Load feature-eng output
         fe_output_path = os.path.join(self.feature_eng_repo_path, self.plugin_params['comparison_csv_path'])
@@ -633,9 +636,9 @@ class FeReplicatorFeeder:
         replicated_comparison_rows = replicated_data.iloc[start_row:end_row]
         
         actual_comparison_rows = len(fe_comparison_rows)
-        print(f"[FE_REPLICATOR] Comparing {actual_comparison_rows} rows (from row {start_row} to {end_row-1})...")
-        print(f"[FE_REPLICATOR] Feature-eng shape: {fe_comparison_rows.shape}")
-        print(f"[FE_REPLICATOR] Replicated shape: {replicated_comparison_rows.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Comparing {actual_comparison_rows} rows (from row {start_row} to {end_row-1})...")
+        if not _QUIET: print(f"[FE_REPLICATOR] Feature-eng shape: {fe_comparison_rows.shape}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Replicated shape: {replicated_comparison_rows.shape}")
         
         # Compare shapes
         shape_match = fe_comparison_rows.shape == replicated_comparison_rows.shape
@@ -675,12 +678,12 @@ class FeReplicatorFeeder:
                         mismatched_columns.append(col)
                         
                         # Show detailed comparison for debugging
-                        print(f"[FE_REPLICATOR] ❌ MISMATCH in column '{col}':")
-                        print(f"  Feature-eng first 3 values: {fe_values[:3]}")
-                        print(f"  Replicated first 3 values: {replicated_values[:3]}")
-                        print(f"  Max difference: {np.max(np.abs(fe_values - replicated_values))}")
+                        if not _QUIET: print(f"[FE_REPLICATOR] ❌ MISMATCH in column '{col}':")
+                        if not _QUIET: print(f"  Feature-eng first 3 values: {fe_values[:3]}")
+                        if not _QUIET: print(f"  Replicated first 3 values: {replicated_values[:3]}")
+                        if not _QUIET: print(f"  Max difference: {np.max(np.abs(fe_values - replicated_values))}")
                 except Exception as e:
-                    print(f"[FE_REPLICATOR] ❌ Error comparing column '{col}': {e}")
+                    if not _QUIET: print(f"[FE_REPLICATOR] ❌ Error comparing column '{col}': {e}")
                     exact_match = False
                     mismatched_columns.append(col)
         else:
@@ -699,19 +702,19 @@ class FeReplicatorFeeder:
         }
         
         if exact_match:
-            print("[FE_REPLICATOR] ✅ PERFECT MATCH! Exact replicability achieved!")
+            if not _QUIET: print("[FE_REPLICATOR] ✅ PERFECT MATCH! Exact replicability achieved!")
         else:
-            print("[FE_REPLICATOR] ❌ MISMATCH detected. Replicability failed.")
-            print(f"[FE_REPLICATOR] Shape match: {shape_match}")
-            print(f"[FE_REPLICATOR] Columns match: {columns_match}")
-            print(f"[FE_REPLICATOR] Mismatched columns: {mismatched_columns}")
+            if not _QUIET: print("[FE_REPLICATOR] ❌ MISMATCH detected. Replicability failed.")
+            if not _QUIET: print(f"[FE_REPLICATOR] Shape match: {shape_match}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Columns match: {columns_match}")
+            if not _QUIET: print(f"[FE_REPLICATOR] Mismatched columns: {mismatched_columns}")
         
         return comparison_result
     
     def process_request(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
         """Main processing method called by the prediction provider."""
         try:
-            print("[FE_REPLICATOR] 🚀 Starting FE replication process...")
+            if not _QUIET: print("[FE_REPLICATOR] 🚀 Starting FE replication process...")
             
             # Step 1: Load FE configuration
             self.load_fe_config(self.plugin_params['fe_config_path'])
@@ -750,7 +753,7 @@ class FeReplicatorFeeder:
             }
             
         except Exception as e:
-            print(f"[FE_REPLICATOR] ❌ Error: {str(e)}")
+            if not _QUIET: print(f"[FE_REPLICATOR] ❌ Error: {str(e)}")
             import traceback
             traceback.print_exc()
             
@@ -781,8 +784,8 @@ class FeReplicatorFeeder:
         # Get maximum of all window sizes
         max_window = max(stl_window, mtm_window, wavelet_min_window)
         
-        print(f"[FE_REPLICATOR] Window sizes - STL: {stl_window}, MTM: {mtm_window}, Wavelet: {wavelet_min_window}")
-        print(f"[FE_REPLICATOR] Maximum window size: {max_window}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Window sizes - STL: {stl_window}, MTM: {mtm_window}, Wavelet: {wavelet_min_window}")
+        if not _QUIET: print(f"[FE_REPLICATOR] Maximum window size: {max_window}")
         
         return max_window
 

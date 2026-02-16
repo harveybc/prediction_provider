@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import argparse
 import pandas as pd
 import numpy as np
@@ -56,7 +59,7 @@ def main():
     # Limitar la serie al número de filas especificado en max_steps (si se define)
     if args.max_steps is not None:
         series = series.iloc[:args.max_steps]
-        print(f"Se utilizarán las primeras {args.max_steps} filas de la serie.")
+        if not _QUIET: print(f"Se utilizarán las primeras {args.max_steps} filas de la serie.")
 
     warnings.filterwarnings("ignore")
 
@@ -91,23 +94,23 @@ def main():
     stats.register("min", np.min)
     stats.register("max", np.max)
 
-    print("Iniciando optimización evolutiva de parámetros ARIMA...\n")
+    if not _QUIET: print("Iniciando optimización evolutiva de parámetros ARIMA...\n")
     ngen = args.ngen
     cxpb = 0.5
     mutpb = 0.2
 
     # Evaluación inicial
-    print("Evaluando población inicial:")
+    if not _QUIET: print("Evaluando población inicial:")
     for ind in tqdm(population, desc="Evaluando genomas", leave=True):
         ind.fitness.values = toolbox.evaluate(ind)
     record = stats.compile(population)
     best_genome = tools.selBest(population, 1)[0]
     hof.update(population)
-    print(f"Generación 0: Mejor AIC = {record['min']:.2f}, Promedio AIC = {record['avg']:.2f}")
+    if not _QUIET: print(f"Generación 0: Mejor AIC = {record['min']:.2f}, Promedio AIC = {record['avg']:.2f}")
 
     # Evolución generacional
     for gen in range(1, ngen + 1):
-        print(f"\n=== Generación {gen} de {ngen} ===")
+        if not _QUIET: print(f"\n=== Generación {gen} de {ngen} ===")
         # Selección
         offspring = toolbox.select(population, len(population))
         offspring = list(map(toolbox.clone, offspring))
@@ -125,7 +128,7 @@ def main():
 
         # Evaluación de los individuos sin fitness asignado
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
-        print(f"Evaluando {len(invalid_ind)} genomas sin fitness...")
+        if not _QUIET: print(f"Evaluando {len(invalid_ind)} genomas sin fitness...")
         for ind in tqdm(invalid_ind, desc="Evaluando genomas", leave=False):
             ind.fitness.values = toolbox.evaluate(ind)
 
@@ -135,14 +138,14 @@ def main():
         record = stats.compile(population)
         best_genome = tools.selBest(population, 1)[0]
         # Información detallada de la generación actual
-        print(f"Generación {gen}: Mejor AIC = {record['min']:.2f}, Promedio AIC = {record['avg']:.2f}, Máximo AIC = {record['max']:.2f}")
-        print(f"Mejor genoma en esta generación: ARIMA({int(best_genome[0])},{int(best_genome[1])},{int(best_genome[2])})")
+        if not _QUIET: print(f"Generación {gen}: Mejor AIC = {record['min']:.2f}, Promedio AIC = {record['avg']:.2f}, Máximo AIC = {record['max']:.2f}")
+        if not _QUIET: print(f"Mejor genoma en esta generación: ARIMA({int(best_genome[0])},{int(best_genome[1])},{int(best_genome[2])})")
     
     # Resultados finales
     best = hof[0]
     best_aic = eval_arima(best, series)[0]
-    print("\n=== Resultado Final ===")
-    print(f"Mejores parámetros encontrados: ARIMA({int(best[0])},{int(best[1])},{int(best[2])}) con AIC = {best_aic:.2f}")
+    if not _QUIET: print("\n=== Resultado Final ===")
+    if not _QUIET: print(f"Mejores parámetros encontrados: ARIMA({int(best[0])},{int(best[1])},{int(best[2])}) con AIC = {best_aic:.2f}")
 
 if __name__ == "__main__":
     main()

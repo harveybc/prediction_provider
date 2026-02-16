@@ -7,6 +7,9 @@ It downloads and processes financial data from various sources based on configur
 Supports batch data fetching, date filtering, and feature selection.
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import pandas as pd
 import numpy as np
 import json
@@ -88,7 +91,7 @@ class DefaultFeeder:
             with open(path, 'r') as f:
                 self.normalization_params = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"Warning: Could not load or parse normalization file at {path}. Error: {e}")
+            if not _QUIET: print(f"Warning: Could not load or parse normalization file at {path}. Error: {e}")
             self.normalization_params = {}
 
     def set_params(self, **kwargs):
@@ -159,7 +162,7 @@ class DefaultFeeder:
         Normalize the dataframe using pre-loaded parameters.
         """
         if not self.normalization_params:
-            print("Warning: Normalization parameters not loaded. Skipping normalization.")
+            if not _QUIET: print("Warning: Normalization parameters not loaded. Skipping normalization.")
             return df
 
         for col, params in self.normalization_params.items():

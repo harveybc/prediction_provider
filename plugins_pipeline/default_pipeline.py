@@ -3,6 +3,9 @@
 Default Pipeline Plugin
 
 This plugin orchestrates the prediction system components, managing the flow of data
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 from the feeder to the predictor and handling the results.
 """
 
@@ -99,15 +102,15 @@ class DefaultPipelinePlugin:
             predictor_plugin: An instance of the predictor plugin.
             feeder_plugin: An instance of the feeder plugin.
         """
-        print("Initializing pipeline...")
+        if not _QUIET: print("Initializing pipeline...")
         self.predictor_plugin = predictor_plugin
         self.feeder_plugin = feeder_plugin
         self._initialize_database()
         
         if self._validate_system():
-            print("Pipeline initialized successfully.")
+            if not _QUIET: print("Pipeline initialized successfully.")
         else:
-            print("Warning: Pipeline initialization incomplete.")
+            if not _QUIET: print("Warning: Pipeline initialization incomplete.")
 
     def run_request(self, request: dict) -> dict:
         """Run a single prediction request and return a structured result.
@@ -135,14 +138,14 @@ class DefaultPipelinePlugin:
         """
         db_path = self.params.get("db_path")
         if not db_path:
-            print("Warning: DB path is not configured.")
+            if not _QUIET: print("Warning: DB path is not configured.")
             return
 
         try:
             self.engine = create_database_engine(f"sqlite:///{db_path}")
-            print(f"Database initialized at {db_path}")
+            if not _QUIET: print(f"Database initialized at {db_path}")
         except Exception as e:
-            print(f"Database initialization failed: {e}")
+            if not _QUIET: print(f"Database initialization failed: {e}")
             self.engine = None
 
     def _validate_system(self):
@@ -150,16 +153,16 @@ class DefaultPipelinePlugin:
         Validate that all required components are available and configured.
         """
         if not self.params.get("pipeline_enabled", True):
-            print("Pipeline is disabled.")
+            if not _QUIET: print("Pipeline is disabled.")
             return False
         if not self.predictor_plugin:
-            print("Predictor plugin not available.")
+            if not _QUIET: print("Predictor plugin not available.")
             return False
         if not self.feeder_plugin:
-            print("Feeder plugin not available.")
+            if not _QUIET: print("Feeder plugin not available.")
             return False
         if not self.engine:
-            print("Database not connected.")
+            if not _QUIET: print("Database not connected.")
             return False
         return True
 
@@ -177,7 +180,7 @@ class DefaultPipelinePlugin:
             session.commit()
             return new_prediction.id
         except Exception as e:
-            print(f"Failed to request prediction: {e}")
+            if not _QUIET: print(f"Failed to request prediction: {e}")
             session.rollback()
             return None
         finally:
@@ -188,38 +191,38 @@ class DefaultPipelinePlugin:
         Execute a single prediction cycle for a given prediction ID.
         """
         if not self._validate_system():
-            print("Cannot run prediction cycle: system not properly initialized.")
+            if not _QUIET: print("Cannot run prediction cycle: system not properly initialized.")
             return
 
         try:
-            print(f"\n--- New prediction cycle started at {datetime.now(timezone.utc).isoformat()} ---")
+            if not _QUIET: print(f"\n--- New prediction cycle started at {datetime.now(timezone.utc).isoformat()} ---")
 
             # 1. Fetch data
-            print("Fetching data...")
+            if not _QUIET: print("Fetching data...")
             input_df = self.feeder_plugin.fetch()
 
             if input_df is None or input_df.empty:
-                print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
+                if not _QUIET: print("Warning: Failed to fetch data or data is empty. Skipping prediction cycle.")
                 return
 
-            print(f"Data fetched successfully. Shape: {input_df.shape}")
+            if not _QUIET: print(f"Data fetched successfully. Shape: {input_df.shape}")
 
             # 2. Make prediction
-            print("Making prediction...")
+            if not _QUIET: print("Making prediction...")
             prediction_output = self.predictor_plugin.predict_with_uncertainty(input_df)
 
             if not prediction_output:
-                print("Warning: Prediction failed. Skipping storage.")
+                if not _QUIET: print("Warning: Prediction failed. Skipping storage.")
                 self._update_prediction_status(prediction_id, 'failed')
                 return
 
-            print("Prediction successful.")
+            if not _QUIET: print("Prediction successful.")
 
             # 3. Store prediction
             self._store_prediction(prediction_id, prediction_output)
 
         except Exception as e:
-            print(f"An error occurred in the prediction pipeline: {e}")
+            if not _QUIET: print(f"An error occurred in the prediction pipeline: {e}")
             self._update_prediction_status(prediction_id, 'failed')
 
     def run(self):
@@ -227,11 +230,11 @@ class DefaultPipelinePlugin:
         The main loop of the prediction pipeline.
         """
         if not self._validate_system():
-            print("Cannot run pipeline: system not properly initialized.")
+            if not _QUIET: print("Cannot run pipeline: system not properly initialized.")
             return
 
         self.running = True
-        print("Prediction pipeline started.")
+        if not _QUIET: print("Prediction pipeline started.")
 
         while self.running:
             prediction_id = self.request_prediction()
@@ -240,7 +243,7 @@ class DefaultPipelinePlugin:
             
             # Wait for the next interval
             interval = self.params.get("prediction_interval", 300)
-            print(f"--- Cycle finished. Waiting for {interval} seconds... ---")
+            if not _QUIET: print(f"--- Cycle finished. Waiting for {interval} seconds... ---")
             time.sleep(interval)
 
     def _update_prediction_status(self, prediction_id, status):
@@ -256,7 +259,7 @@ class DefaultPipelinePlugin:
                 prediction.status = status
                 session.commit()
         except Exception as e:
-            print(f"Failed to update prediction status: {e}")
+            if not _QUIET: print(f"Failed to update prediction status: {e}")
             session.rollback()
         finally:
             session.close()
@@ -266,7 +269,7 @@ class DefaultPipelinePlugin:
         Store the prediction output in the database for a given prediction ID.
         """
         if not self.engine:
-            print("Cannot store prediction: database not connected.")
+            if not _QUIET: print("Cannot store prediction: database not connected.")
             self._update_prediction_status(prediction_id, 'failed')
             return
 
@@ -277,13 +280,13 @@ class DefaultPipelinePlugin:
                 prediction.prediction_data = prediction_output
                 prediction.status = 'completed'
                 session.commit()
-                print(f"Successfully stored prediction for ID: {prediction_id}")
+                if not _QUIET: print(f"Successfully stored prediction for ID: {prediction_id}")
             else:
-                print(f"Prediction with ID {prediction_id} not found.")
+                if not _QUIET: print(f"Prediction with ID {prediction_id} not found.")
                 self._update_prediction_status(prediction_id, 'failed')
 
         except Exception as e:
-            print(f"Failed to store prediction: {e}")
+            if not _QUIET: print(f"Failed to store prediction: {e}")
             session.rollback()
             self._update_prediction_status(prediction_id, 'failed')
         finally:
@@ -310,4 +313,4 @@ class DefaultPipelinePlugin:
         Cleanup pipeline resources.
         """
         self.stop()
-        print("Pipeline cleanup completed")
+        if not _QUIET: print("Pipeline cleanup completed")

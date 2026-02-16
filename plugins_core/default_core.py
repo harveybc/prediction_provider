@@ -8,6 +8,9 @@ This plugin is the central orchestrator of the application. It handles:
 - Starting and stopping the application services.
 """
 
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
+
 import os
 import importlib
 import threading
@@ -803,7 +806,7 @@ class DefaultCorePlugin:
             try:
                 pipeline.initialize(predictor, feeder)
             except Exception as e:
-                print(f"Warning: failed to initialize pipeline with predictor+feeder: {e}")
+                if not _QUIET: print(f"Warning: failed to initialize pipeline with predictor+feeder: {e}")
         
     def start(self):
         """Start the FastAPI application."""
@@ -814,7 +817,7 @@ class DefaultCorePlugin:
         reload = self.plugin_params.get("reload", False)
         workers = self.plugin_params.get("workers", 1)
         
-        print(f"Starting FastAPI server on {host}:{port}")
+        if not _QUIET: print(f"Starting FastAPI server on {host}:{port}")
         uvicorn.run(
             "plugins_core.default_core:app",
             host=host,
@@ -825,7 +828,7 @@ class DefaultCorePlugin:
         
     def stop(self):
         """Stop the application (placeholder for future implementation)."""
-        print("Stopping core plugin...")
+        if not _QUIET: print("Stopping core plugin...")
         pass
 
 # For backward compatibility
@@ -850,9 +853,9 @@ try:
     app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
     app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
     
-    print("All endpoint routers successfully registered")
+    if not _QUIET: print("All endpoint routers successfully registered")
 except ImportError as e:
-    print(f"Warning: Could not import some endpoint routers: {e}")
+    if not _QUIET: print(f"Warning: Could not import some endpoint routers: {e}")
     # Fall back to basic endpoints defined in this file
 
 # Add simple endpoint for testing admin key
@@ -893,7 +896,7 @@ try:
     
     AUTH_AVAILABLE = True
 except ImportError as e:
-    print(f"Auth import error: {e}")
+    if not _QUIET: print(f"Auth import error: {e}")
     AUTH_AVAILABLE = False
 from pydantic import EmailStr
 from datetime import datetime, timezone, timedelta
