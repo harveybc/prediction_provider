@@ -3,11 +3,10 @@
 Default Pipeline Plugin
 
 This plugin orchestrates the prediction system components, managing the flow of data
-import os as _os
-_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
-
 from the feeder to the predictor and handling the results.
 """
+import os as _os
+_QUIET = _os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1'
 
 import time
 import json
