@@ -1,314 +1,447 @@
 # Prediction Provider
 
-## Description
+A plugin-based, asynchronous prediction provider for financial time series, built on FastAPI with a multi-role authentication system, billing marketplace, and modular architecture.
 
-The Prediction Provider is a comprehensive, plugin-based system for financial time series prediction. It provides a RESTful API for asynchronous prediction requests with complete audit trails for billing and compliance. The system is designed following Test-Driven Development (TDD) principles with extensive behavioral testing coverage.
+## Table of Contents
 
-## Current Status
+- [Architecture Overview](#architecture-overview)
+- [Plugin System](#plugin-system)
+- [Authentication & Authorization](#authentication--authorization)
+- [API Endpoints](#api-endpoints)
+- [Database Schema](#database-schema)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Testing](#testing)
+- [Security Features](#security-features)
 
-**Development Status**: Core functionality complete, authentication and production features under development
+## Architecture Overview
 
-### Test Coverage: 110 Tests (84% Pass Rate)
-- ✅ **Unit Tests**: 32 tests (31 passing, 1 failing) - 96% pass rate
-- ✅ **Integration Tests**: 19 tests (100% pass rate)
-- ✅ **System Tests**: 7 tests (100% pass rate)
-- ✅ **Acceptance Tests**: 13 tests (100% pass rate)
-- ⚠️ **Security Tests**: 8 tests (62% pass rate - 5 passing, 3 failing)
-- 🔴 **Production Tests**: 17 tests (24% pass rate - 4 passing, 13 failing)
+The system is built around five plugin types that form a processing pipeline:
 
-### What's Working
-- ✅ Asynchronous prediction processing
-- ✅ Plugin-based architecture (feeder, predictor, pipeline, core, endpoints)
-- ✅ Database operations and data persistence
-- ✅ RESTful API endpoints for predictions
-- ✅ Health monitoring and system status
-- ✅ CORS support and basic security measures
+```
+┌─────────────┐     ┌──────────────┐     ┌────────────┐
+│   Feeder    │────▶│   Pipeline   │────▶│  Predictor  │
+│  (data in)  │     │ (orchestrate)│     │ (model out) │
+└─────────────┘     └──────────────┘     └────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │    Core     │
+                    │  (FastAPI)  │
+                    └──────┬──────┘
+                           │
+                    ┌──────┴──────┐
+                    │  Endpoints  │
+                    │  (routers)  │
+                    └─────────────┘
+```
 
-### What's In Development
-- ⚠️ Authentication enforcement and user management
-- ⚠️ Input sanitization and security hardening
-- ⚠️ Rate limiting and brute force protection
-- ⚠️ Complete audit logging for compliance
-- ⚠️ Production-ready security measures
+**Core** (`plugins_core/default_core.py`): Central FastAPI application. Manages middleware (CORS, rate limiting, request logging), authentication, all API routes, and background prediction tasks.
 
-## Architecture
+**Feeder** (`plugins_feeder/`): Data acquisition — fetches from yfinance or CSV files, handles normalization and date filtering.
 
-The system follows a **plugin-based architecture** with five main plugin types:
+**Pipeline** (`plugins_pipeline/`): Orchestrates feeder → predictor flow. Manages prediction lifecycle (pending → processing → completed/failed).
 
-1. **Feeder Plugins**: Obtain and prepare input data (e.g., financial data from APIs)
-2. **Predictor Plugins**: Load models and generate predictions
-3. **Pipeline Plugins**: Orchestrate the complete processing workflow
-4. **Core Plugins**: Manage central server configuration and API framework
-5. **Endpoints Plugins**: Define individual RESTful API endpoints
+**Predictor** (`plugins_predictor/`): Model loading and inference. Supports Keras models with MC-dropout uncertainty, ideal baseline predictions, and noisy ideal predictions.
 
-## Installation Instructions
+**Endpoints** (`plugins_endpoints/`): Additional endpoint plugins (health, info, metrics, predict). Most routing is handled directly in the core plugin.
 
-To install and set up the Prediction Provider system, follow these steps:
+## Plugin System
 
-1. **Clone the Repository**:
-    ```bash
-    git clone https://github.com/harveybc/prediction_provider.git
-    cd prediction_provider
-    ```
+Plugins are loaded via Python entry points defined in `setup.py`. Each plugin type has a dedicated directory:
 
-2. **Create and Activate a Virtual Environment**:
-    ```bash
-    # Using conda (recommended)
-    conda create --name prediction_provider python=3.12
-    conda activate prediction_provider
-    
-    # Or using venv
-    python -m venv venv
-    source venv/bin/activate  # On Windows: venv\Scripts\activate
-    ```
+| Plugin Type | Directory | Entry Point Group | Available Plugins |
+|---|---|---|---|
+| Core | `plugins_core/` | `core.plugins` | `default_core` |
+| Feeder | `plugins_feeder/` | `feeder.plugins` | `default_feeder` |
+| Pipeline | `plugins_pipeline/` | `pipeline.plugins` | `default_pipeline` |
+| Predictor | `plugins_predictor/` | `predictor.plugins` | `default_predictor`, `noisy_ideal_predictor` |
+| Endpoints | `plugins_endpoints/` | `endpoints.plugins` | `default_endpoints`, `predict_endpoint`, `health_endpoint`, `info_endpoint`, `metrics_endpoint` |
 
-3. **Install Dependencies**:
-    ```bash
-    pip install --upgrade pip
-    pip install -r requirements.txt
-    ```
+All plugins follow a common interface:
+- `plugin_params` (dict): Default parameter values
+- `plugin_debug_vars` (list): Keys for debug info
+- `__init__(config)`: Initialize with config dict
+- `set_params(**kwargs)`: Update parameters
 
-4. **Initialize Database**:
-    ```bash
-    python init_db.py
-    ```
+See [REFERENCE_plugins.md](REFERENCE_plugins.md) for detailed plugin documentation.
 
-5. **Build the Package**:
-    ```bash
-    python -m build
-    ```
+## Authentication & Authorization
 
-6. **Install the Package**:
-    ```bash
-    pip install .
-    ```
+### Roles
+
+The system uses role-based access control with these roles stored in the `roles` table:
+
+| Role | Description |
+|---|---|
+| `administrator` / `admin` | Full system access, user management, billing oversight |
+| `provider` | Can set model pricing, view earnings |
+| `client` | Can request predictions, view own data, view spend |
+| `evaluator` | Can claim and process prediction requests from queue |
+| `operator` | Can view logs and usage stats |
+| `guest` | Minimal access |
+
+### Authentication Methods
+
+1. **API Key** (primary): Pass `X-API-KEY` header. Keys are SHA-256 hashed and stored in `users.hashed_api_key`.
+2. **JWT Token**: Obtain via `/api/v1/auth/login`, pass as Bearer token.
+3. **Flexible auth**: Main prediction endpoints (`/api/v1/predictions/`, `/api/v1/predict`) support optional authentication — public access when `REQUIRE_AUTH=false` (default), API key validated when provided.
+
+### User Lifecycle
+
+1. Admin creates user via `POST /api/v1/admin/users` → user gets API key, `is_active=False`
+2. Admin activates via `POST /api/v1/admin/users/{username}/activate`
+3. User obtains API key via `POST /api/v1/auth/api-key` (username/password)
+4. User authenticates all requests with `X-API-KEY` header
+
+## API Endpoints
+
+### Public / Flexible Auth
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` | Root — API info |
+| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/predict` | Create prediction (public or authenticated) |
+| `POST` | `/api/v1/predictions/` | Create prediction (flexible auth) |
+| `GET` | `/api/v1/predictions/` | List predictions |
+| `GET` | `/api/v1/predictions/{id}` | Get prediction by ID |
+| `DELETE` | `/api/v1/predictions/{id}` | Delete prediction |
+| `GET` | `/api/v1/plugins/` | List available plugins |
+| `GET` | `/api/v1/plugins/status` | Plugin status |
+| `POST` | `/predict` | Legacy predict endpoint |
+| `GET` | `/status/{id}` | Legacy status endpoint |
+
+### Authenticated (API Key Required)
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/login` | any | Login, get JWT token |
+| `POST` | `/api/v1/auth/api-key` | any | Get API key |
+| `POST` | `/api/v1/auth/regenerate-key` | any | Regenerate API key |
+| `POST` | `/api/v1/secure/predictions/` | any | Create prediction (secure) |
+| `GET` | `/api/v1/secure/predictions/` | any | List own predictions (secure) |
+| `GET` | `/api/v1/secure/predictions/{id}` | any | Get prediction (secure) |
+| `DELETE` | `/api/v1/secure/predictions/{id}` | any | Delete prediction (secure) |
+| `POST` | `/api/v1/auth/predictions/` | any | Create prediction (authenticated) |
+| `GET` | `/api/v1/users/profile` | any | Get own profile |
+| `PUT` | `/api/v1/users/password` | any | Change password |
+| `PUT` | `/api/v1/users/profile` | any | Update profile (no role changes) |
+
+### Admin Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/admin/users` | Create user |
+| `GET` | `/api/v1/admin/users` | List all users |
+| `POST` | `/api/v1/admin/users/{username}/activate` | Activate user |
+| `POST` | `/api/v1/admin/users/{username}/deactivate` | Deactivate user |
+| `GET` | `/api/v1/admin/logs` | Get system logs |
+| `GET` | `/api/v1/admin/usage/{username}` | Get user usage stats |
+| `DELETE` | `/api/v1/admin/logs/{id}` | Blocked — returns 405 |
+| `PUT` | `/api/v1/admin/logs/{id}` | Blocked — returns 405 |
+
+### Admin Endpoints (v1 admin router — `admin_endpoints.py`)
+
+These are registered under `/api/v1/admin` via the admin router:
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/v1/admin/users` | Create user (with password, role, subscription) |
+| `GET` | `/api/v1/admin/users` | List users with filtering/pagination |
+| `PUT` | `/api/v1/admin/users/{user_id}` | Update user |
+| `DELETE` | `/api/v1/admin/users/{user_id}` | Deactivate/delete user |
+| `GET` | `/api/v1/admin/audit` | Audit logs with filtering |
+| `GET` | `/api/v1/admin/stats` | System statistics |
+| `POST` | `/api/v1/admin/config` | Update system config |
+| `GET` | `/api/v1/admin/system/health` | Detailed system health |
+
+### Billing & Provider Endpoints (`billing_endpoints.py`)
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/provider/pricing` | provider/admin | Set model pricing |
+| `GET` | `/api/v1/provider/pricing` | provider/admin | Get own pricing |
+| `GET` | `/api/v1/provider/earnings` | provider/admin | Earnings summary |
+| `GET` | `/api/v1/client/spend` | client/admin | Spend summary |
+| `GET` | `/api/v1/client/billing` | client/admin | Billing history |
+| `GET` | `/api/v1/admin/billing` | admin | All billing records |
+| `GET` | `/api/v1/admin/billing/summary` | admin | Billing summary |
+| `GET` | `/api/v1/admin/pricing` | admin | All active pricing |
+
+### Client Endpoints (`client_endpoints.py`)
+
+Registered under `/api/v1/client`:
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/client/predict` | client/admin | Submit prediction request |
+| `GET` | `/api/v1/client/predictions/{id}` | any authenticated | Get prediction details |
+| `GET` | `/api/v1/client/predictions/` | any authenticated | List predictions with filters |
+| `PUT` | `/api/v1/client/predictions/{id}` | client/admin | Update pending prediction |
+| `DELETE` | `/api/v1/client/predictions/{id}` | client/admin | Cancel prediction |
+| `GET` | `/api/v1/client/predictions/{id}/download/{file}` | any authenticated | Download result file |
+
+### Evaluator Endpoints (`evaluator_endpoints.py`)
+
+Registered under `/api/v1/evaluator`:
+
+| Method | Path | Role | Description |
+|---|---|---|---|
+| `GET` | `/api/v1/evaluator/pending` | evaluator/admin | List pending requests |
+| `POST` | `/api/v1/evaluator/claim/{id}` | evaluator/admin | Claim request for processing |
+| `POST` | `/api/v1/evaluator/submit/{id}` | evaluator/admin | Submit results |
+| `GET` | `/api/v1/evaluator/assigned` | evaluator/admin | List assigned requests |
+| `POST` | `/api/v1/evaluator/release/{id}` | evaluator/admin | Release request back to queue |
+| `GET` | `/api/v1/evaluator/stats` | evaluator/admin | Performance statistics |
+
+## Database Schema
+
+SQLite database (`prediction_provider.db`) with SQLAlchemy ORM.
+
+### Core Tables
+
+| Table | Description |
+|---|---|
+| `users` | User accounts with hashed passwords and API keys |
+| `roles` | Role definitions with JSON permissions |
+| `predictions` | Prediction records (main table used by core endpoints) |
+| `prediction_jobs` | Extended prediction jobs (used by client/evaluator endpoints) |
+| `api_logs` | HTTP request audit log |
+| `time_series_data` | Cached time series data |
+| `system_configuration` | Key-value system config |
+| `billing_records` | Client-provider billing transactions |
+| `provider_pricing` | Provider model pricing |
+| `user_sessions` | Active user sessions |
+
+### Extended Tables (`database_models_extended.py`)
+
+Additional tables for the full marketplace (defined but not all actively used):
+
+`predictions_extended`, `prediction_files`, `transactions`, `credits`, `invoices`, `audit_log_extended`, `security_events`, `compliance_reports`, `system_metrics`, `performance_metrics`, `users_extended`
+
+## Installation
+
+```bash
+# Clone the repository
+git clone git@github.com:harveybc/prediction_provider.git
+cd prediction_provider
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install the package (registers entry points for plugins)
+pip install -e .
+
+# Initialize database (tables created automatically on first run)
+python -c "from plugins_core.default_core import app; print('DB initialized')"
+```
+
+### Requirements
+
+- Python 3.12+
+- TensorFlow 2.x (for default predictor)
+- SQLite (bundled with Python)
+
+## Configuration
+
+Configuration is loaded in order of precedence (highest last):
+1. `app/config.py` `DEFAULT_VALUES`
+2. Config file (`--load_config config.json`)
+3. CLI arguments
+4. Unknown CLI args (plugin-specific)
+
+### Key Configuration Parameters
+
+```python
+# Core
+host = "127.0.0.1"
+port = 8000
+
+# Database
+database_url = "sqlite:///predictions.db"
+
+# Security
+secret_key = "your-secret-key-here"
+algorithm = "HS256"
+access_token_expire_minutes = 30
+require_activation = True  # Users must be activated by admin
+
+# Feeder
+feeder_plugin = "default_feeder"
+instrument = "MSFT"
+data_source = "yfinance"  # or "file"
+data_file_path = None  # path to CSV when data_source="file"
+
+# Predictor
+predictor_plugin = "default_predictor"  # or "noisy_ideal_predictor"
+model_path = None
+prediction_horizon = 6
+
+# Pipeline
+pipeline_plugin = "default_pipeline"
+prediction_interval = 300
+```
+
+### Environment Variables
+
+| Variable | Description |
+|---|---|
+| `PREDICTION_PROVIDER_QUIET` | Set to `1` to suppress verbose output |
+| `REQUIRE_AUTH` | Set to `true` to require authentication on flexible endpoints |
+| `SKIP_BACKGROUND_TASKS` | Set to `true` to skip background prediction processing |
+| `SKIP_RATE_LIMITING` | Set to `true` to disable rate limiting |
+| `TF_CPP_MIN_LOG_LEVEL` | Set to `3` to suppress TensorFlow C++ logs |
 
 ## Usage
 
-### Starting the Server
+### Running the Server
 
 ```bash
-# Using the main module
-python -m app.main
-
-# Or using the console script (if installed)
+# Basic start
 prediction_provider
 
-# With custom configuration
-python -m app.main --config config/production_config.json
+# With config file
+prediction_provider --load_config config.json
+
+# With custom host/port
+prediction_provider --host 0.0.0.0 --port 8080
+
+# Quiet mode
+PREDICTION_PROVIDER_QUIET=1 prediction_provider
 ```
 
-The server will start on `http://localhost:8000` by default.
+### Making Predictions
 
-### API Usage Examples
-
-#### Health Check
 ```bash
-curl http://localhost:8000/health
-```
-
-#### Create Prediction Request
-```bash
-curl -X POST "http://localhost:8000/api/v1/predictions/" \
+# Public prediction (no auth required by default)
+curl -X POST http://localhost:8000/api/v1/predict \
   -H "Content-Type: application/json" \
-  -d '{
-    "symbol": "AAPL",
-    "interval": "1d",
-    "prediction_type": "short_term"
-  }'
+  -d '{"symbol": "AAPL", "prediction_type": "short_term"}'
+
+# Authenticated prediction
+curl -X POST http://localhost:8000/api/v1/predict \
+  -H "Content-Type: application/json" \
+  -H "X-API-KEY: your-api-key" \
+  -d '{"symbol": "AAPL", "prediction_type": "short_term", "prediction_horizon": 6}'
+
+# Check prediction status
+curl http://localhost:8000/api/v1/predictions/1
 ```
 
-#### Check Prediction Status
+### Admin Workflow
+
 ```bash
-curl http://localhost:8000/api/v1/predictions/123
+# Login as admin
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username": "admin", "password": "admin_password"}'
+
+# Create a client user
+curl -X POST http://localhost:8000/api/v1/admin/users \
+  -H "X-API-KEY: admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "client1", "email": "client1@example.com", "role": "client"}'
+
+# Activate the user
+curl -X POST http://localhost:8000/api/v1/admin/users/client1/activate \
+  -H "X-API-KEY: admin-api-key"
 ```
 
-#### List All Predictions
-```bash
-curl http://localhost:8000/api/v1/predictions/
-```
-
-### Running Tests
+## Testing
 
 ```bash
 # Run all tests
-python -m pytest tests/ -v
+PREDICTION_PROVIDER_QUIET=1 pytest tests/ -v
 
-# Run specific test categories
-python -m pytest tests/unit_tests/ -v
-python -m pytest tests/integration_tests/ -v
-python -m pytest tests/system_tests/ -v
-python -m pytest tests/acceptance_tests/ -v
-
-# Run tests with coverage
-python -m pytest tests/ --cov=app --cov-report=html
-```
-        ```bash
-        set_env.bat
-        pytest
-        ```
-
-    - On Linux, run:
-        ```bash
-        sh ./set_env.sh
-        pytest
-        ```
-
-9. **(Optional) Generate Documentation**:
-    - Run the following command to generate code documentation in HTML format in the docs directory:
-        ```bash
-        pdoc --html -o docs app
-        ```
-10. **(Optional) Install Nvidia CUDA GPU support**:
-
-Please read: [Readme - CUDA](https://github.com/harveybc/predictor/blob/master/README_CUDA.md)
-
-## Usage
-
-Example config json files are located in examples\config, for a list of individual parameters to call via CLI or in a config json file, use: **predictor.bat --help**
-
-After executing the prediction pipeline, the predictor will generate 4 files:
-- **output_file**: csv file, predictions for the selected time_horizon **(see defaults in app\config.py)**
-- **results_file**: csv file, aggregated results for the configured number of iterations of the training with the selected number of training epochs 
-- **loss_plot_file**: png image, the plot of error vs epoch for training and validation in the last iteration 
-- **model_plot_file**: png image, the plot of the used Keras model
- 
-The application supports several command line arguments to control its behavior for example:
-
-```
-usage: predictor.bat --load_config examples\config\phase_1\phase_1_ann_6300_1h_config.json --epochs 100 --iterations 5
+# Run specific test suites
+pytest tests/unit_tests/ -v
+pytest tests/integration_tests/ -v
+pytest tests/security_tests/ -v
+pytest tests/acceptance_tests/ -v
+pytest tests/system_tests/ -v
+pytest tests/behavioral_tests/ -v
+pytest tests/production_tests/ -v
 ```
 
-There are many examples of config files in the **examples\config directory**, also training data of EURUSD and othertimeseries in **examples\data** and the results of the example config files are set to be on **examples\results**, there are some scripts to automate running sequential predictions in **examples\scripts**.
+### Test Structure
 
+| Suite | Directory | Focus |
+|---|---|---|
+| Unit | `tests/unit_tests/` | Individual plugins, models, endpoints |
+| Integration | `tests/integration_tests/` | Database, plugin loading, API integration, prediction pipeline |
+| Security | `tests/security_tests/` | Authentication, authorization, billing, input validation, rate limiting |
+| Acceptance | `tests/acceptance_tests/` | End-to-end API workflows, LTS workflow |
+| System | `tests/system_tests/` | Core orchestration, database integrity, logging, security |
+| Behavioral | `tests/behavioral_tests/` | User behavior patterns |
+| Production | `tests/production_tests/` | Production readiness checks |
 
-### Directory Structure
+See [TESTING_GUIDE.md](TESTING_GUIDE.md) for details.
 
-```
-predictor/
-│
-├── app/                                 # Main application package
-│   ├── __init__.py                     # Package initialization
-│   ├── cli.py                          # Command-line interface handling
-│   ├── config.py                       # Default configuration values
-│   ├── config_handler.py               # Configuration management
-│   ├── config_merger.py                # Configuration merging logic
-│   ├── data_handler.py                 # Data loading and saving functions
-│   ├── data_processor.py               # Core data processing pipeline
-│   ├── main.py                         # Application entry point
-│   ├── plugin_loader.py                # Dynamic plugin loading system
-│   ├── reconstruction.py               # Data reconstruction utilities
-│   └── plugins/                        # Prediction plugins directory
-│       ├── predictor_plugin_ann.py     # Artificial Neural Network plugin
-│       ├── predictor_plugin_cnn.py     # Convolutional Neural Network plugin
-│       ├── predictor_plugin_lstm.py    # Long Short-Term Memory plugin
-│       └── predictor_plugin_transformer.py # Transformer model plugin
-│
-├── tests/                              # Test suite directory
-│   ├── __init__.py                    # Test package initialization
-│   ├── conftest.py                    # pytest configuration
-│   ├── acceptance_tests/              # User acceptance tests
-│   ├── integration_tests/             # Integration test modules
-│   ├── system_tests/                  # System-wide test cases
-│   └── unit_tests/                    # Unit test modules
-│
-├── examples/                           # Example files directory
-│   ├── config/                         # Example configuration files
-│   ├── data/                           # Example training data
-│   ├── results/                        # Example output results
-│   └── scripts/                        # Example execution scripts
-│       └── run_phase_1.bat                 # Phase 1 execution script
-│
-├── concatenate_csv.py                  # CSV file manipulation utility
-├── setup.py                           # Package installation script
-├── predictor.bat                      # Windows execution script
-├── predictor.sh                       # Linux execution script
-├── set_env.bat                        # Windows environment setup
-├── set_env.sh                         # Linux environment setup
-├── requirements.txt                    # Python dependencies
-├── LICENSE.txt                        # Project license
-└── prompt.txt                         # Project documentation
-```
+## Security Features
 
-## Example of plugin model:
-```mermaid
-graph TD
+- **Password hashing**: bcrypt (via `app/auth.py`)
+- **API key hashing**: SHA-256
+- **JWT tokens**: HS256 algorithm with configurable expiration
+- **Rate limiting**: Login endpoint limited to 3 attempts/60 seconds (configurable)
+- **Concurrent prediction limits**: Max 10 per user (configurable)
+- **Input sanitization**: HTML escaping, script tag removal, ticker validation
+- **CORS**: Configurable (currently allows all origins)
+- **Audit logging**: All API requests logged to `api_logs` table
+- **Audit immutability**: DELETE/PUT on audit logs returns 405
+- **Role-based access control**: Fine-grained permissions per endpoint
 
-    subgraph SP_Input ["Input Processing (Features Only)"]
-        I[/"Input (ws, num_channels)"/] --> FS{"Split Features"};
-
-        subgraph SP_Branches ["Feature Branches (Parallel)"]
-             FS -- Feature 1 --> F1_FLAT["Flatten"] --> F1_DENSE["Dense x M"];
-             FS -- ... --> F_DOTS["..."];
-             FS -- Feature n --> Fn_FLAT["Flatten"] --> Fn_DENSE["Dense x M"];
-        end
-
-        F1_DENSE --> M{"Merge Concat Features"};
-        F_DOTS --> M;
-        Fn_DENSE --> M;
-    end
-
-    subgraph SP_Heads ["Output Heads (Parallel)"]
-
-        subgraph Head1 ["Head for Horizon 1"]
-            M --> H1_DENSE["Dense x K"];
-            H1_DENSE --> H1_BAYES{"DenseFlipout (Bayesian)"};
-            H1_DENSE --> H1_BIAS["Dense (Bias)"];
-            H1_BAYES --> H1_ADD{"Add"};
-            H1_BIAS --> H1_ADD;
-            H1_ADD --> O1["Output H1"];
-        end
-
-         subgraph HeadN ["Head for Horizon N"]
-            M --> HN_DENSE["Dense x K"];
-            HN_DENSE --> HN_BAYES{"DenseFlipout (Bayesian)"};
-            HN_DENSE --> HN_BIAS["Dense (Bias)"];
-            HN_BAYES --> HN_ADD{"Add"};
-            HN_BIAS --> HN_ADD;
-            HN_ADD --> ON["Output HN"];
-        end
-
-    end
-
-    O1 --> Z((Final Output List));
-    ON --> Z;
-
-    subgraph Legend
-         NoteM["M = config['intermediate_layers']"];
-         NoteK["K = config['intermediate']"];
-         NoteNoFB["NOTE: Diagram simplified - Feedback loops not shown."];
-    end
-
-    style H1_BAYES,HN_BAYES fill:#556B2F,stroke:#333,color:#fff;
-    style H1_BIAS,HN_BIAS fill:#4682B4,stroke:#333,color:#fff;
-    style NoteM,NoteK,NoteNoFB fill:#8B413,stroke:#333,stroke-dasharray:5 5,color:#fff;
+## Project Structure
 
 ```
-
-### Test Strategy: Behavioral vs Implementation Testing
-
-This project implements a dual testing strategy:
-
-#### 🎯 **Behavioral Tests** (Recommended for CI/CD)
-- **Location**: `tests/behavioral_tests/`
-- **Focus**: User journeys and business outcomes
-- **Stability**: High - resilient to implementation changes
-- **Examples**: User onboarding, data isolation, access control
-
-```bash
-# Run behavioral tests (stable across code changes)
-SKIP_BACKGROUND_TASKS=true SKIP_RATE_LIMITING=true python -m pytest tests/behavioral_tests/ -v
+prediction_provider/
+├── app/                          # Core application code
+│   ├── main.py                   # Entry point
+│   ├── config.py                 # Default configuration values
+│   ├── config_handler.py         # Config file loading
+│   ├── config_merger.py          # Config merging logic
+│   ├── cli.py                    # CLI argument parsing
+│   ├── auth.py                   # Authentication & authorization
+│   ├── database.py               # SQLAlchemy engine & session
+│   ├── database_models.py        # Core database models
+│   ├── database_models_extended.py # Extended marketplace models
+│   ├── database_utilities.py     # DB utility functions
+│   ├── models.py                 # Prediction SQLAlchemy model + Pydantic schemas
+│   ├── plugin_loader.py          # Entry point plugin loading
+│   ├── plugin_manager.py         # Plugin registry
+│   ├── user_management.py        # User management router
+│   ├── admin_endpoints.py        # Admin API router
+│   ├── billing_endpoints.py      # Billing/provider API router
+│   ├── client_endpoints.py       # Client API router
+│   └── evaluator_endpoints.py    # Evaluator API router
+├── plugins_core/                 # Core plugins
+│   └── default_core.py           # FastAPI app, all routes, middleware
+├── plugins_feeder/               # Data feeder plugins
+│   ├── default_feeder.py         # yfinance/CSV data feeder
+│   ├── real_feeder.py            # Real-time feeder
+│   └── ...                       # Other feeder variants
+├── plugins_pipeline/             # Pipeline plugins
+│   ├── default_pipeline.py       # Standard pipeline orchestration
+│   └── enhanced_pipeline.py      # Enhanced with date range support
+├── plugins_predictor/            # Predictor plugins
+│   ├── default_predictor.py      # Keras model predictor with MC-dropout
+│   └── noisy_ideal_predictor.py  # Look-ahead predictor with noise
+├── plugins_endpoints/            # Endpoint plugins
+│   ├── default_endpoints.py      # Default endpoint plugin
+│   ├── predict_endpoint.py       # Predict endpoint
+│   ├── health_endpoint.py        # Health endpoint
+│   ├── info_endpoint.py          # Info endpoint
+│   └── metrics_endpoint.py       # Metrics endpoint
+├── tests/                        # Test suites
+├── setup.py                      # Package setup with entry points
+├── requirements.txt              # Python dependencies
+└── pyproject.toml                # Build configuration
 ```
 
-#### ⚙️ **Implementation Tests** (For detailed debugging)
-- **Location**: `tests/production_tests/`, `tests/security_tests/`, etc.
-- **Focus**: Specific API contracts and implementation details
-- **Stability**: Lower - may need updates when implementation changes
-- **Use Case**: Detailed debugging and implementation validation
+## License
 
-```bash
-# Run implementation tests (may need updates after code changes)
-SKIP_BACKGROUND_TASKS=true SKIP_RATE_LIMITING=true python -m pytest tests/production_tests/ -v
-```
+See repository for license information.
 
-See `BEHAVIORAL_TESTING_GUIDE.md` for detailed guidance on test design principles.
+## Author
+
+Harvey Bastidas

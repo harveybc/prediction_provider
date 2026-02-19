@@ -40,6 +40,7 @@ from app.auth import (
 
 # Import new endpoint routers - enabling gradually
 from app.client_endpoints import router as client_router
+from app.billing_endpoints import router as billing_router
 # from app.evaluator_endpoints import router as evaluator_router
 # from app.admin_endpoints import router as admin_router
 
@@ -161,6 +162,7 @@ app.add_middleware(
 
 # Register new endpoint routers - enabling gradually
 app.include_router(client_router, prefix="/api/v1/client", tags=["client"])
+app.include_router(billing_router, prefix="/api/v1", tags=["billing"])
 # app.include_router(evaluator_router, prefix="/api/v1/evaluator", tags=["evaluator"])
 # app.include_router(admin_router, prefix="/api/v1/admin", tags=["admin"])
 
@@ -175,13 +177,61 @@ async def rate_limit_middleware(request: Request, call_next):
 # Add request logging middleware
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    """Log all HTTP requests."""
+    """Log all HTTP requests to both Python logger and ApiLog database."""
     start_time = time.time()
+    
+    # Read request body for POST/PUT/PATCH on API paths
+    request_payload = None
+    path = request.url.path
+    if path.startswith("/api/") and request.method in ("POST", "PUT", "PATCH"):
+        try:
+            body = await request.body()
+            import json as _json
+            request_payload = _json.loads(body) if body else None
+            # Reset body so downstream handlers can read it
+            async def _receive():
+                return {"type": "http.request", "body": body}
+            request._receive = _receive
+        except Exception:
+            request_payload = None
+    
     response = await call_next(request)
     process_time = time.time() - start_time
     
-    logger = logging.getLogger(__name__)
-    logger.info(f"{request.method} {request.url.path} - {response.status_code} - {process_time:.4f}s")
+    # Log to Python logging so caplog-based tests can observe it
+    if path.startswith("/api/"):
+        logging.getLogger("prediction_provider.access").info(
+            f"{request.method} {path} - {response.status_code} - {process_time*1000:.1f}ms"
+        )
+    
+    # Only log API paths to the database to avoid overhead
+    if path.startswith("/api/"):
+        try:
+            db_factory = app.dependency_overrides.get(get_db, get_db)
+            db = next(db_factory())
+            user_id = None
+            api_key_val = request.headers.get("X-API-KEY")
+            if api_key_val:
+                user = get_user_by_api_key(db, api_key_val)
+                if user:
+                    user_id = user.id
+            
+            log_entry = ApiLog(
+                request_id=str(uuid.uuid4()),
+                user_id=user_id,
+                ip_address=request.client.host if request.client else "unknown",
+                endpoint=path,
+                method=request.method,
+                request_timestamp=datetime.now(timezone.utc),
+                response_status_code=response.status_code,
+                response_time_ms=process_time * 1000,
+                request_payload=request_payload
+            )
+            db.add(log_entry)
+            db.commit()
+            db.close()
+        except Exception:
+            pass
     
     return response
 
@@ -277,7 +327,7 @@ async def create_prediction(request: PredictionRequest, background_tasks: Backgr
             pipeline_plugin=pipeline_plugin,
             prediction_type=prediction_type,
             ticker=ticker,
-            result={"request": request.model_dump()}
+            result={"request": {k: sanitize_input(str(v)) if isinstance(v, str) else v for k, v in request.model_dump().items()}}
         )
         
         db.add(prediction)
@@ -395,7 +445,7 @@ async def create_prediction_secure(request: PredictionRequest, background_tasks:
             pipeline_plugin=request.pipeline_plugin,
             prediction_type=request.prediction_type,
             ticker=request.get_symbol(),
-            result={"request": request.model_dump()}
+            result={"request": {k: sanitize_input(str(v)) if isinstance(v, str) else v for k, v in request.model_dump().items()}}
         )
         
         db.add(prediction)

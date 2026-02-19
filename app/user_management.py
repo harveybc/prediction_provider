@@ -37,6 +37,7 @@ class UserResponse(BaseModel):
     is_active: bool
     role: str
     created_at: datetime
+    api_key: Optional[str] = None  # Only returned on user creation
 
 class LoginRequest(BaseModel):
     username: str
@@ -70,6 +71,7 @@ class LogEntry(BaseModel):
     request_timestamp: datetime
     response_status_code: int
     response_time_ms: float
+    request_payload: Optional[dict] = None
 
 class LogsResponse(BaseModel):
     logs: List[LogEntry]
@@ -133,7 +135,7 @@ async def regenerate_api_key(current_user: User = Depends(get_current_user), db:
     return {"api_key": api_key, "expires_in_days": 90}
 
 # User management endpoints
-@router.post("/admin/users", response_model=UserResponse)
+@router.post("/admin/users", response_model=UserResponse, status_code=201)
 async def create_user(user_data: UserCreate, current_user: User = Depends(require_admin), db: Session = Depends(get_db)):
     """Create a new user (Admin only)"""
     # Check if username already exists
@@ -168,6 +170,10 @@ async def create_user(user_data: UserCreate, current_user: User = Depends(requir
         is_active=False  # Requires activation
     )
     
+    # Generate API key for the new user
+    api_key = generate_api_key()
+    user.hashed_api_key = hash_api_key(api_key)
+    
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -178,7 +184,8 @@ async def create_user(user_data: UserCreate, current_user: User = Depends(requir
         email=user.email,
         is_active=user.is_active,
         role=user.role.name,
-        created_at=user.created_at
+        created_at=user.created_at,
+        api_key=api_key
     )
 
 @router.post("/admin/users/{username}/activate")
@@ -291,7 +298,8 @@ async def get_logs(
                 method=log.method,
                 request_timestamp=log.request_timestamp,
                 response_status_code=log.response_status_code,
-                response_time_ms=log.response_time_ms
+                response_time_ms=log.response_time_ms,
+                request_payload=log.request_payload
             )
             for log in logs
         ],

@@ -150,9 +150,10 @@ def require_any_role(required_roles: list):
     return role_checker
 
 # Role-based dependencies
-require_admin = require_role("administrator")
+require_admin = require_role(["administrator", "admin"])
 require_client = require_role("client")
 require_evaluator = require_role("evaluator")
 require_operator = require_role("operator")
-require_admin_or_operator = require_any_role(["administrator", "operator"])
+require_provider = require_role(["provider"])
+require_admin_or_operator = require_any_role(["administrator", "admin", "operator"])
 require_evaluator_or_admin = require_any_role(["evaluator", "administrator"])

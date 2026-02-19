@@ -1,90 +1,119 @@
-# Prediction Provider - Files Reference Documentation
+# File Reference
 
-## 1. Project Structure
+## Application Code (`app/`)
 
-```
-/
-├── app/
-│   ├── __init__.py
-│   ├── cli.py
-│   ├── config.py
-│   ├── config_handler.py
-│   ├── config_merger.py
-│   ├── main.py
-│   ├── models.py
-│   └── plugin_loader.py
-├── plugins_core/
-│   ├── __init__.py
-│   └── default_core.py
-├── plugins_endpoints/
-│   ├── __init__.py
-│   ├── health_endpoint.py
-│   ├── info_endpoint.py
-│   ├── metrics_endpoint.py
-│   └── predict_endpoint.py
-├── plugins_feeder/
-│   ├── __init__.py
-│   └── default_feeder.py
-├── plugins_pipeline/
-│   ├── __init__.py
-│   └── default_pipeline.py
-├── plugins_predictor/
-│   ├── __init__.py
-│   └── default_predictor.py
-├── examples/
-│   ├── config/
-│   ├── data/
-│   └── results/
-├── tests/
-│   ├── acceptance_tests/
-│   ├── integration_tests/
-│   ├── system_tests/
-│   └── unit_tests/
-├── .gitignore
-├── a_new_file.txt
-├── pp.bat
-├── pp.sh
-├── prediction_provider.db
-├── pyproject.toml
-├── README.md
-├── REFERENCE.md
-├── REFERENCE_files.md
-├── REFERNECE_plugins.md
-├── requirements.txt
-├── set_env.bat
-├── set_env.sh
-├── setup.py
-└── test_service.py
-```
+| File | Description |
+|---|---|
+| `main.py` | Entry point. Loads config, plugins, starts server. |
+| `config.py` | `DEFAULT_VALUES` dict with all configuration parameters |
+| `config_handler.py` | Config file loading (JSON) |
+| `config_merger.py` | Merges config from defaults, files, CLI args |
+| `cli.py` | CLI argument parser |
+| `auth.py` | Authentication: bcrypt, JWT, API keys, role decorators |
+| `database.py` | SQLAlchemy engine, `SessionLocal`, `Base`, `get_db()` |
+| `database_models.py` | Core ORM models: User, Role, PredictionJob, ApiLog, TimeSeriesData, SystemConfiguration, BillingRecord, ProviderPricing, UserSession |
+| `database_models_extended.py` | Extended ORM models for full marketplace (mostly schema-only) |
+| `database_utilities.py` | `get_db_session()`, `create_all_tables()` |
+| `models.py` | `Prediction` ORM model, Pydantic schemas, DB helpers |
+| `plugin_loader.py` | Entry point plugin discovery and loading |
+| `plugin_manager.py` | Simple plugin name→instance registry |
+| `user_management.py` | User management router (auth, CRUD, logs, usage) |
+| `admin_endpoints.py` | Admin router (users, audit, stats, config, health) |
+| `billing_endpoints.py` | Billing router (pricing, earnings, spend, billing) |
+| `client_endpoints.py` | Client router (predict, list, update, cancel, download) |
+| `evaluator_endpoints.py` | Evaluator router (pending, claim, submit, release, stats) |
+| `data_handler.py` | Data handling utilities |
+| `data_processor.py` | Data processing utilities |
+| `reconstruction.py` | Signal reconstruction utilities |
+| `heuristic_strategy.py` | Heuristic trading strategy |
+| `optimizer_ga.py` | Genetic algorithm optimizer |
+| `arima_optimizer.py` | ARIMA model optimizer |
 
----
+## Core Plugin (`plugins_core/`)
 
-## 2. `DefaultFeederPlugin` - Feature Generation & Normalization
+| File | Description |
+|---|---|
+| `default_core.py` | FastAPI app, all routes, middleware, auth, background tasks, input sanitization, rate limiting |
 
-**File:** `plugins_feeder/default_feeder.py`
+## Feeder Plugins (`plugins_feeder/`)
 
-This plugin is responsible for creating the exact data structure required by the `DefaultPredictorPlugin`. Its primary duties are to source raw data, compute a comprehensive set of features, and normalize the data according to a strict specification.
+| File | Description |
+|---|---|
+| `default_feeder.py` | Main feeder: yfinance + CSV with normalization |
+| `real_feeder.py` | Real-time data feeder |
+| `real_feeder_original.py` | Original real-time feeder variant |
+| `real_feeder_modular.py` | Modular real-time feeder |
+| `fe_replicator_feeder.py` | Feature engineering replicator |
+| `default_feeder_new.py` | Experimental feeder variant |
+| `data_fetcher.py` | Data fetching utilities |
+| `data_normalizer.py` | Data normalization |
+| `data_validator.py` | Data validation |
+| `feature_generator.py` | Feature generation |
+| `stl_feature_generator.py` | STL decomposition features |
+| `stl_preprocessor.py` | STL preprocessing |
+| `technical_indicators.py` | Technical indicator computation |
 
-### Responsibilities:
-1.  **Data Sourcing**: Fetches the latest raw data for the instrument specified in the configuration (e.g., `EUR/USD`). This includes:
-    -   Primary time-series data (e.g., hourly `OPEN`, `HIGH`, `LOW`, `CLOSE`).
-    -   High-frequency data (e.g., 15-minute and 30-minute `CLOSE` prices).
-    -   Correlated market data (e.g., `S&P500_Close`, `vix_close`).
-2.  **Feature Calculation**: Computes a wide range of technical indicators and derived features from the raw data. This includes all 45 columns listed in the global `REFERENCE.md`.
-3.  **Normalization**: Critically, it normalizes the entire feature set using pre-defined `min` and `max` values from the JSON file specified in the `use_normalization_json` config parameter. This step is essential for the model to perform correctly.
+## Pipeline Plugins (`plugins_pipeline/`)
 
----
+| File | Description |
+|---|---|
+| `default_pipeline.py` | Standard pipeline: feeder→predictor→DB |
+| `default_pipeline_new.py` | Experimental pipeline variant |
+| `enhanced_pipeline.py` | Date range + real-time mode support |
 
-## 3. `DefaultPredictorPlugin` - Model Input Requirements
+## Predictor Plugins (`plugins_predictor/`)
 
-**File:** `plugins_predictor/default_predictor.py`
+| File | Description |
+|---|---|
+| `default_predictor.py` | Keras model loading, MC-dropout uncertainty, ideal baseline |
+| `default_predictor_new.py` | Experimental predictor variant |
+| `noisy_ideal_predictor.py` | Look-ahead predictions with Gaussian noise |
 
-This plugin loads the pre-trained Keras model and performs inference. It has a strict data contract and expects the input data to be in a precise format.
+## Endpoint Plugins (`plugins_endpoints/`)
 
-### Expected Input Format:
--   **Data Type**: A pandas DataFrame.
--   **Shape**: The DataFrame must have a shape of `(256, 45)`, where `256` is the `window_size` (and `batch_size`) and `45` is the number of features.
--   **Columns**: The DataFrame must contain the exact 45 feature columns as specified in the global `REFERENCE.md`, in the correct order.
--   **Normalization**: All values in the DataFrame (except for `DATE_TIME`, which should be handled appropriately) **must be min-max normalized to a `[0, 1]` range** using the official normalization parameters.
+| File | Description |
+|---|---|
+| `default_endpoints.py` | Default endpoint plugin (FastAPI router) |
+| `predict_endpoint.py` | Predict endpoint plugin |
+| `health_endpoint.py` | Health check endpoint |
+| `info_endpoint.py` | System info endpoint |
+| `metrics_endpoint.py` | Metrics endpoint |
+| `*_new.py` variants | Experimental endpoint variants |
 
-Any deviation from this format will result in either a runtime error or, worse, silent incorrect predictions. The `DefaultFeederPlugin` is designed to guarantee this contract is met.
+## Configuration & Build
+
+| File | Description |
+|---|---|
+| `setup.py` | Package setup with entry points |
+| `pyproject.toml` | Build system config |
+| `requirements.txt` | Python dependencies |
+
+## Documentation
+
+| File | Description |
+|---|---|
+| `README.md` | Project overview and reference |
+| `REFERENCE.md` | Complete API reference |
+| `REFERENCE_plugins.md` | Plugin reference |
+| `REFERENCE_files.md` | This file |
+| `user_manual.md` | User guide for clients, providers, admins |
+| `IMPLEMENTATION_SUMMARY.md` | Implementation status |
+| `TESTING_GUIDE.md` | Test structure and execution |
+| `BEHAVIORAL_TESTING_GUIDE.md` | Behavioral test guide |
+| `PLUGIN_REPLICABILITY_GUIDE.md` | Plugin creation guide |
+| `design_system.md` | System architecture |
+| `design_acceptance.md` | Acceptance criteria |
+| `design_integration.md` | Integration points |
+| `design_unit.md` | Unit specifications |
+
+## Tests (`tests/`)
+
+| Directory | Description |
+|---|---|
+| `unit_tests/` | Plugin, model, endpoint unit tests |
+| `integration_tests/` | DB, API, pipeline, plugin loading integration |
+| `security_tests/` | Auth, authz, billing, input validation, rate limiting |
+| `acceptance_tests/` | End-to-end workflow tests |
+| `system_tests/` | Core orchestration, DB integrity, logging, security |
+| `behavioral_tests/` | User behavior patterns |
+| `production_tests/` | Production readiness |

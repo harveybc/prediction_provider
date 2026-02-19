@@ -102,6 +102,37 @@ class SystemConfiguration(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
     updated_by = Column(Integer, ForeignKey('users.id'), nullable=True)
 
+class BillingRecord(Base):
+    """Billing records for prediction marketplace transactions"""
+    __tablename__ = 'billing_records'
+    __table_args__ = {'extend_existing': True}
+    id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    provider_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    prediction_id = Column(String, ForeignKey('prediction_jobs.id'), nullable=True)
+    cost = Column(Float, nullable=False, default=0.0)
+    currency = Column(String(3), nullable=False, default="USD")
+    description = Column(Text, nullable=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    client = relationship("User", foreign_keys=[client_id])
+    provider = relationship("User", foreign_keys=[provider_id])
+
+class ProviderPricing(Base):
+    """Provider pricing for prediction models"""
+    __tablename__ = 'provider_pricing'
+    __table_args__ = {'extend_existing': True}
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    model_name = Column(String, nullable=False)
+    price_per_request = Column(Float, nullable=False, default=0.0)
+    currency = Column(String(3), nullable=False, default="USD")
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    
+    provider = relationship("User", foreign_keys=[provider_id])
+
 class UserSession(Base):
     __tablename__ = 'user_sessions'
     __table_args__ = {'extend_existing': True}

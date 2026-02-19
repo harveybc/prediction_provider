@@ -124,25 +124,17 @@ class DefaultFeeder:
         if ta is None:
             raise ImportError("pandas_ta is required to calculate technical indicators")
 
-        # Define a custom strategy to avoid indicators with deprecated pandas functions
-        custom_strategy = ta.Strategy(
-            name="Custom Strategy",
-            description="A custom strategy to calculate required indicators",
-            ta=[
-                {"kind": "rsi"},
-                {"kind": "macd", "fast": 12, "slow": 26, "signal": 9},
-                {"kind": "ema", "length": 20},
-                {"kind": "stoch", "k": 14, "d": 3, "smooth_k": 3},
-                {"kind": "adx", "length": 14},
-                {"kind": "atr", "length": 14},
-                {"kind": "cci", "length": 14, "c": 0.015},
-                {"kind": "willr", "length": 14},
-                {"kind": "mom", "length": 10},
-                {"kind": "roc", "length": 10},
-            ]
-        )
-        # Apply the custom strategy
-        df.ta.strategy(custom_strategy)
+        # Calculate technical indicators individually (pandas_ta >= 2.x API)
+        df.ta.rsi(append=True)
+        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df.ta.ema(length=20, append=True)
+        df.ta.stoch(k=14, d=3, smooth_k=3, append=True)
+        df.ta.adx(length=14, append=True)
+        df.ta.atr(length=14, append=True)
+        df.ta.cci(length=14, c=0.015, append=True)
+        df.ta.willr(length=14, append=True)
+        df.ta.mom(length=10, append=True)
+        df.ta.roc(length=10, append=True)
 
         # Bar-based features
         df['BC-BO'] = df['Close'].shift(1) - df['Open'].shift(1)

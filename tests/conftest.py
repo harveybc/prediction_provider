@@ -21,7 +21,7 @@ from sqlalchemy.orm import sessionmaker
 
 from plugins_core.default_core import app
 from app.database import Base, get_db
-from app.database_models import User, Role
+from app.database_models import User, Role, BillingRecord, ProviderPricing  # noqa: register all tables
 from app.auth import hash_api_key, get_password_hash
 
 # Add the project root to the Python path
@@ -41,18 +41,22 @@ def setup_test_data():
     """Setup test users and roles for testing"""
     db = TestingSessionLocal()
     try:
-        # Clear existing data
-        db.query(User).delete()
-        db.query(Role).delete()
+        # Clear ALL existing data to prevent cross-test pollution
+        for table in reversed(Base.metadata.sorted_tables):
+            db.execute(table.delete())
+        db.commit()
         
         # Create roles
         admin_role = Role(id=1, name="admin", description="Administrator", permissions={"can_predict": True, "can_view_logs": True, "can_manage_users": True})
         client_role = Role(id=2, name="client", description="Client", permissions={"can_predict": True, "can_view_logs": False})
         operator_role = Role(id=3, name="operator", description="Operator", permissions={"can_predict": True, "can_view_logs": True})
         
+        provider_role = Role(id=4, name="provider", description="Provider", permissions={"can_predict": True, "can_set_pricing": True})
+        
         db.add(admin_role)
         db.add(client_role)
         db.add(operator_role)
+        db.add(provider_role)
         db.commit()
         
         # Create test users with specific API keys
@@ -68,6 +72,7 @@ def setup_test_data():
             {"username": "billing_user", "email": "billing@test.com", "api_key": "billing_user_key", "role_id": 2},
             {"username": "integrity_user", "email": "integrity@test.com", "api_key": "integrity_user_key", "role_id": 2},
             {"username": "data_user", "email": "data@test.com", "api_key": "data_user_key", "role_id": 2},
+            {"username": "provider_user", "email": "provider@test.com", "api_key": "provider_key", "role_id": 4},
         ]
         
         for user_data in test_users:
@@ -107,12 +112,28 @@ def setup_test_database():
 
 @pytest.fixture(scope="module")
 def client():
+    # Reset in-memory state for each module
+    try:
+        import plugins_core.default_core as _core
+        _core.rate_limit_store.clear()
+        _core._concurrent_predictions.clear()
+    except Exception:
+        pass
+    # Reset DB data for module isolation
+    setup_test_data()
     with TestClient(app) as c:
         yield c
 
 @pytest.fixture(scope="module")
 def test_client():
     """Alias for client fixture to match test expectations."""
+    try:
+        import plugins_core.default_core as _core
+        _core.rate_limit_store.clear()
+        _core._concurrent_predictions.clear()
+    except Exception:
+        pass
+    setup_test_data()
     with TestClient(app) as c:
         yield c
 
