@@ -51,15 +51,39 @@ from app.config_merger import merge_config, process_unknown_args
 # Import the FastAPI app for tests
 from plugins_core.default_core import app
 
-def setup_logging(level=logging.INFO):
-    """Setup logging configuration."""
+logger = logging.getLogger(__name__)
+
+def setup_logging(config: Dict[str, Any]):
+    """
+    Setup logging configuration based on config options.
+
+    Priority: PREDICTION_PROVIDER_QUIET=1 env var > quiet_mode config > log_level config.
+    Defaults to WARNING if none specified.
+
+    :param config: Application configuration dictionary
+    :type config: Dict[str, Any]
+    :return: Configured logger
+    :rtype: logging.Logger
+    """
+    # Determine effective log level
+    if os.environ.get('PREDICTION_PROVIDER_QUIET', '0') == '1' or config.get('quiet_mode', False):
+        level = logging.ERROR
+    else:
+        level_name = config.get('log_level', 'WARNING').upper()
+        level = getattr(logging, level_name, logging.WARNING)
+
+    # Reset root logger handlers to avoid duplicate basicConfig calls
+    root = logging.getLogger()
+    root.handlers.clear()
+    
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
             logging.FileHandler('app.log')
-        ]
+        ],
+        force=True,
     )
     return logging.getLogger(__name__)
 
@@ -67,7 +91,7 @@ def main():
     """
     Orchestrates the execution of the Prediction Provider system.
     """
-    print("--- Initializing Prediction Provider ---")
+    logger.info("--- Initializing Prediction Provider ---")
 
     # 1. Configuration Loading
     args, unknown_args = parse_args()
@@ -78,15 +102,18 @@ def main():
     if args.load_config:
         try:
             file_config = load_config(args.load_config)
-            print(f"Loaded local config from: {args.load_config}")
+            logger.info("Loaded local config from: %s", args.load_config)
         except Exception as e:
-            print(f"Failed to load local configuration: {e}")
+            logger.error("Failed to load local configuration: %s", e)
             sys.exit(1)
 
     # First merge pass (without plugin-specific parameters)
-    print("Merging configuration (first pass)...")
+    logger.info("Merging configuration (first pass)...")
     unknown_args_dict = process_unknown_args(unknown_args)
     config = merge_config(config, {}, {}, file_config, cli_args, unknown_args_dict)
+
+    # Setup logging based on merged config
+    setup_logging(config)
 
     # 2. Plugin Loading
     plugin_types = ['core', 'endpoints', 'feeder', 'pipeline', 'predictor']
@@ -94,35 +121,35 @@ def main():
 
     for plugin_type in plugin_types:
         plugin_name = config.get(f'{plugin_type}_plugin', f'default_{plugin_type}')
-        print(f"Loading {plugin_type.capitalize()} Plugin: {plugin_name}")
+        logger.info("Loading %s Plugin: %s", plugin_type.capitalize(), plugin_name)
         try:
             plugin_class, _ = load_plugin(f'{plugin_type}.plugins', plugin_name)
             plugin_instance = plugin_class(config)
             plugin_instance.set_params(**config)
             plugins[plugin_type] = plugin_instance
         except Exception as e:
-            print(f"Failed to load or initialize {plugin_type.capitalize()} Plugin '{plugin_name}': {e}")
+            logger.error("Failed to load or initialize %s Plugin '%s': %s", plugin_type.capitalize(), plugin_name, e)
             sys.exit(1)
 
     # Second merge pass (with all plugin parameters)
-    print("Merging configuration (second pass, with plugin params)...")
+    logger.info("Merging configuration (second pass, with plugin params)...")
     for plugin_type, plugin_instance in plugins.items():
         config = merge_config(config, plugin_instance.plugin_params, {}, file_config, cli_args, unknown_args_dict)
 
     # 3. Start Application using the Core Plugin
     core_plugin = plugins.get('core')
     if not core_plugin:
-        print("Fatal: Core plugin not found. Cannot start application.")
+        logger.error("Fatal: Core plugin not found. Cannot start application.")
         sys.exit(1)
         
     # Pass all loaded plugins to the core system
     core_plugin.set_plugins(plugins)
 
     try:
-        print("Starting Core Plugin...")
+        logger.info("Starting Core Plugin...")
         core_plugin.start()
     except Exception as e:
-        print(f"An unexpected error occurred while starting the core plugin: {e}")
+        logger.error("An unexpected error occurred while starting the core plugin: %s", e)
         core_plugin.stop()
         sys.exit(1)
 

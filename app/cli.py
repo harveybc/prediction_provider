@@ -72,6 +72,7 @@ def parse_args():
     # Logging & Monitoring
     parser.add_argument('--enable_logging', action='store_true', help='Enable system logging')
     parser.add_argument('--log_level', type=str, help='Logging level (DEBUG, INFO, WARNING, ERROR)')
+    parser.add_argument('--quiet_mode', action='store_true', help='Suppress output (sets log level to ERROR)')
     
     # User Management
     parser.add_argument('--create_user', type=str, help='Create new user with username')

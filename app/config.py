@@ -63,7 +63,8 @@ DEFAULT_VALUES = {
     "prediction_interval": 300,
     "pipeline_db_path": "prediction_provider.db",
     "enable_logging": True,
-    "log_level": "INFO",
+    "quiet_mode": False,
+    "log_level": "WARNING",
     
     # --- User Management ---
     "create_user": None,
