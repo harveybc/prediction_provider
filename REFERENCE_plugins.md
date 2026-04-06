@@ -73,6 +73,39 @@ The central orchestrator. Creates the FastAPI application, registers all routes 
 from plugins_core.default_core import app
 ```
 
+### `sync_core` — SyncCorePlugin
+
+**Module**: `plugins_core.sync_core`
+
+Extends `DefaultCorePlugin` with three synchronous binary-prediction endpoints for integration with external strategy engines (e.g. heuristic-strategy's `plugin_api_predictions`).
+
+**Parameters**: Inherits all parameters from `default_core`.
+
+**Endpoints**:
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/model/info` | Returns model metadata (name, window_size, supported directions, prediction scope) |
+| `POST` | `/api/v1/predict/entry` | Entry prediction — returns `buy_entry_binary` and `sell_entry_binary` |
+| `POST` | `/api/v1/predict/exit` | Exit prediction — returns `exit_binary` (1=keep open, 0=close early) |
+
+**Request/Response Schemas**:
+
+- **Entry Request**: `{"datetime": "DD.MM.YYYY HH:MM:SS.fff", "tp": float, "sl": float}`
+- **Entry Response**: `{"buy_entry_binary": 0|1, "sell_entry_binary": 0|1}`
+- **Exit Request**: `{"datetime": "DD.MM.YYYY HH:MM:SS.fff", "direction": "buy"|"sell", "tp_price": float, "sl_price": float}`
+- **Exit Response**: `{"exit_binary": 0|1}`
+- **Info Response**: `{"model_name": str, "window_size": int, "supported_types": [...], "entry_directions": [...], "exit_directions": [...], "prediction_scope": str}`
+
+**Key Methods**:
+- `set_plugins(plugins)` — Overrides parent to expose `_LOADED_PLUGINS` at module level for endpoint access
+- `start()` — Points uvicorn at `plugins_core.sync_core:app` instead of default_core
+
+**Usage**:
+```bash
+python app/main.py --core_plugin sync_core --predictor_plugin binary_ideal_oracle --csv_file data.csv
+```
+
 ---
 
 ## Feeder Plugins
@@ -270,6 +303,73 @@ result = predictor.predict_at("2024-01-15 10:00:00")
 # Generate all predictions for noise sweep
 all_preds = predictor.generate_all_predictions()
 hourly_df = all_preds["hourly"]  # DataFrame with Prediction_h_1..h_6
+```
+
+### `binary_ideal_oracle` — BinaryIdealOracle
+
+**Module**: `plugins_predictor.binary_ideal_oracle`
+
+An oracle (look-ahead) predictor that scans future OHLC price data to determine whether a take-profit (TP) level is reached before a stop-loss (SL) level within a weekly prediction scope (until Friday close). Returns binary signals for both buy and sell directions. Designed for use with `sync_core` and heuristic-strategy's `plugin_api_predictions`.
+
+**Parameters**:
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `csv_file` | str | `None` | Path to OHLC CSV with DATE_TIME, OPEN, LOW, HIGH, CLOSE columns |
+| `noise_probability` | float | `0.0` | Probability of flipping the binary prediction (0.0 = perfect oracle) |
+| `noise_seed` | int | `42` | Random seed for noise reproducibility |
+| `close_column` | str | `"CLOSE"` | Close price column name |
+| `high_column` | str | `"HIGH"` | High price column name |
+| `low_column` | str | `"LOW"` | Low price column name |
+| `datetime_column` | str | `"DATE_TIME"` | Datetime column name |
+| `pip_cost` | float | `0.00001` | Cost per pip (used to convert tp/sl pips to price) |
+| `prediction_horizon` | int | `30` | Fallback horizon when Friday close calc fails |
+| `friday_close_hour` | int | `20` | Hour of Friday market close (UTC) |
+| `window_size` | int | `0` | Reported window size in model info (0 = uses data length) |
+
+**Key Methods**:
+
+- `predict_entry(timestamp, tp_pips, sl_pips)` → `dict` — Scans future bars for BOTH buy and sell directions until Friday close:
+  ```json
+  {
+    "buy_entry_binary": 0|1,
+    "sell_entry_binary": 0|1,
+    "timestamp": "ISO string",
+    "current_price": 1.0800
+  }
+  ```
+  For each direction, returns 1 if TP is hit before SL within the weekly horizon, 0 otherwise.
+
+- `predict_exit(timestamp, direction, tp_price, sl_price)` → `dict` — Scans remaining bars for a specific open position:
+  ```json
+  {
+    "exit_binary": 0|1,
+    "timestamp": "ISO string",
+    "current_price": 1.0800
+  }
+  ```
+  Returns 1 (keep position open) if TP will be hit before SL, 0 (close early) otherwise.
+
+- `get_model_info()` → `dict` — Returns model metadata for the `/api/v1/model/info` endpoint.
+
+- `predict(input_data, **kwargs)` → `dict` — Pipeline compatibility method. Delegates to `predict_entry()`.
+
+**Usage Example**:
+```python
+oracle = BinaryIdealOracle({
+    "csv_file": "data/eurusd_hourly.csv",
+    "noise_probability": 0.0,
+    "pip_cost": 0.00001,
+    "friday_close_hour": 20
+})
+
+# Entry prediction
+entry = oracle.predict_entry("2024-01-15 10:00:00", tp_pips=5.0, sl_pips=10.0)
+# → {"buy_entry_binary": 1, "sell_entry_binary": 0, ...}
+
+# Exit prediction for open buy position
+exit_pred = oracle.predict_exit("2024-01-15 14:00:00", direction="buy",
+                                 tp_price=1.0810, sl_price=1.0790)
+# → {"exit_binary": 1, ...}  (keep open — TP will be hit)
 ```
 
 ---

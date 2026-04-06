@@ -52,10 +52,10 @@ Plugins are loaded via Python entry points defined in `setup.py`. Each plugin ty
 
 | Plugin Type | Directory | Entry Point Group | Available Plugins |
 |---|---|---|---|
-| Core | `plugins_core/` | `core.plugins` | `default_core` |
+| Core | `plugins_core/` | `core.plugins` | `default_core`, `sync_core` |
 | Feeder | `plugins_feeder/` | `feeder.plugins` | `default_feeder` |
 | Pipeline | `plugins_pipeline/` | `pipeline.plugins` | `default_pipeline` |
-| Predictor | `plugins_predictor/` | `predictor.plugins` | `default_predictor`, `noisy_ideal_predictor` |
+| Predictor | `plugins_predictor/` | `predictor.plugins` | `default_predictor`, `noisy_ideal_predictor`, `binary_ideal_oracle` |
 | Endpoints | `plugins_endpoints/` | `endpoints.plugins` | `default_endpoints`, `predict_endpoint`, `health_endpoint`, `info_endpoint`, `metrics_endpoint` |
 
 All plugins follow a common interface:
@@ -95,6 +95,20 @@ The system uses role-based access control with these roles stored in the `roles`
 4. User authenticates all requests with `X-API-KEY` header
 
 ## API Endpoints
+
+### Synchronous Prediction Endpoints (sync_core plugin)
+
+When using `--core_plugin sync_core`, the following endpoints are available for synchronous binary predictions (used by heuristic-strategy's `api_predictions` plugin):
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/model/info` | Model metadata (window_size, supported directions, prediction scope) |
+| `POST` | `/api/v1/predict/entry` | Entry prediction — returns `buy_entry_binary` and `sell_entry_binary` |
+| `POST` | `/api/v1/predict/exit` | Exit prediction — returns `exit_binary` (1=keep open, 0=close early) |
+
+**Entry request**: `{"datetime": "22.03.2017 08:00:00.000", "tp": 5.0, "sl": 10.0}`
+
+**Exit request**: `{"datetime": "22.03.2017 10:00:00.000", "direction": "buy", "tp_price": 1.0810, "sl_price": 1.0790}`
 
 ### Public / Flexible Auth
 
@@ -311,6 +325,30 @@ prediction_provider --host 0.0.0.0 --port 8080
 PREDICTION_PROVIDER_QUIET=1 prediction_provider
 ```
 
+### Running the Sync Core (for heuristic-strategy integration)
+
+```bash
+# Start with sync_core + binary_ideal_oracle
+PREDICTION_PROVIDER_QUIET=1 PYTHONPATH=./:$PYTHONPATH python app/main.py \
+  --core_plugin sync_core \
+  --predictor_plugin binary_ideal_oracle \
+  --csv_file path/to/ohlc_data.csv \
+  --quiet_mode
+
+# Test entry prediction
+curl -s http://127.0.0.1:8000/api/v1/predict/entry \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"datetime":"22.03.2017 08:00:00.000","tp":5.0,"sl":10.0}'
+
+# Test exit prediction
+curl -s http://127.0.0.1:8000/api/v1/predict/exit \
+  -X POST -H "Content-Type: application/json" \
+  -d '{"datetime":"22.03.2017 10:00:00.000","direction":"buy","tp_price":1.0810,"sl_price":1.0790}'
+
+# Get model info
+curl -s http://127.0.0.1:8000/api/v1/model/info
+```
+
 ### Making Predictions
 
 ```bash
@@ -415,7 +453,8 @@ prediction_provider/
 │   ├── client_endpoints.py       # Client API router
 │   └── evaluator_endpoints.py    # Evaluator API router
 ├── plugins_core/                 # Core plugins
-│   └── default_core.py           # FastAPI app, all routes, middleware
+│   ├── default_core.py           # FastAPI app, all routes, middleware
+│   └── sync_core.py              # Sync endpoints for binary entry/exit predictions
 ├── plugins_feeder/               # Data feeder plugins
 │   ├── default_feeder.py         # yfinance/CSV data feeder
 │   ├── real_feeder.py            # Real-time feeder
@@ -425,7 +464,8 @@ prediction_provider/
 │   └── enhanced_pipeline.py      # Enhanced with date range support
 ├── plugins_predictor/            # Predictor plugins
 │   ├── default_predictor.py      # Keras model predictor with MC-dropout
-│   └── noisy_ideal_predictor.py  # Look-ahead predictor with noise
+│   ├── noisy_ideal_predictor.py  # Look-ahead predictor with noise
+│   └── binary_ideal_oracle.py    # Binary oracle — scans future TP/SL outcomes
 ├── plugins_endpoints/            # Endpoint plugins
 │   ├── default_endpoints.py      # Default endpoint plugin
 │   ├── predict_endpoint.py       # Predict endpoint

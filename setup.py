@@ -19,7 +19,8 @@ setup(
         # Predictor plugins - Cargan modelos y generan predicciones
         'predictor.plugins': [
             'default_predictor=plugins_predictor.default_predictor:DefaultPredictor',
-            'noisy_ideal_predictor=plugins_predictor.noisy_ideal_predictor:NoisyIdealPredictor'
+            'noisy_ideal_predictor=plugins_predictor.noisy_ideal_predictor:NoisyIdealPredictor',
+            'binary_ideal_oracle=plugins_predictor.binary_ideal_oracle:BinaryIdealOracle'
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [
@@ -31,7 +32,8 @@ setup(
         ],
         # API core plugins - Gestionan configuración central del servidor Flask
         'core.plugins': [
-            'default_core=plugins_core.default_core:DefaultCorePlugin'
+            'default_core=plugins_core.default_core:DefaultCorePlugin',
+            'sync_core=plugins_core.sync_core:SyncCorePlugin'
         ]
     },
     install_requires=[
