@@ -60,11 +60,13 @@ class BinaryIdealOracle:
         "prediction_horizon": 30,
         "friday_close_hour": 20,
         "window_size": 0,
+        "spread_cost_pips": 5.0,  # spread(2) + slippage(1) + commission(~1) + entry-gap buffer(1)
     }
 
     plugin_debug_vars = [
         "csv_file", "noise_probability", "noise_seed", "pip_cost",
         "prediction_horizon", "friday_close_hour", "window_size",
+        "spread_cost_pips",
     ]
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -147,17 +149,22 @@ class BinaryIdealOracle:
         Scan future bars from *idx+1* to *idx+horizon*.
 
         For a **buy** trade:
-          - TP hit when HIGH >= tp_price  → return 1.0
-          - SL hit when LOW  <= sl_price  → return 0.0
+          - TP hit when CLOSE >= tp_price  → return 1.0  (close-based TP)
+          - SL hit when LOW   <= sl_price  → return 0.0  (intra-bar SL)
 
         For a **sell** trade (mirror):
-          - TP hit when LOW  <= tp_price  → return 1.0
-          - SL hit when HIGH >= sl_price  → return 0.0
+          - TP hit when CLOSE <= tp_price  → return 1.0  (close-based TP)
+          - SL hit when HIGH  >= sl_price  → return 0.0  (intra-bar SL)
+
+        Using CLOSE for TP ensures that the strategy (which exits via
+        ``self.close()`` with CoC at close price) fills at a price >= TP.
+        SL still uses intra-bar HIGH/LOW to catch worst-case stop-outs.
 
         If neither level is reached within the horizon → return 0.0.
         """
         high_col = self.params["high_column"]
         low_col = self.params["low_column"]
+        close_col = self.params["close_column"]
         n = len(self._data)
 
         for step in range(1, horizon + 1):
@@ -167,16 +174,17 @@ class BinaryIdealOracle:
 
             bar_high = float(self._data.iloc[fi][high_col])
             bar_low = float(self._data.iloc[fi][low_col])
+            bar_close = float(self._data.iloc[fi][close_col])
 
             if direction == "buy":
                 if bar_low <= sl_price:
                     return 0.0
-                if bar_high >= tp_price:
+                if bar_close >= tp_price:
                     return 1.0
             else:  # sell
                 if bar_high >= sl_price:
                     return 0.0
-                if bar_low <= tp_price:
+                if bar_close <= tp_price:
                     return 1.0
 
         return 0.0
@@ -192,12 +200,19 @@ class BinaryIdealOracle:
     # Entry prediction
     # ------------------------------------------------------------------
 
-    def predict_entry(self, timestamp, tp_pips: float, sl_pips: float) -> Dict[str, Any]:
+    def predict_entry(self, timestamp, tp_pips: float, sl_pips: float,
+                      spread_pips: float = 0.0, commission_per_lot: float = 0.0,
+                      slippage_pips: float = 0.0) -> Dict[str, Any]:
         """
         Entry prediction — "should I open a buy / sell order?"
 
         Computes TP/SL absolute levels from the current price for BOTH
         directions.  Scans future bars until Friday close.
+
+        When ``spread_pips``, ``commission_per_lot``, or ``slippage_pips`` are
+        provided (> 0), the oracle computes the exact cost in pips and widens
+        TP by that amount.  Otherwise falls back to the configured
+        ``spread_cost_pips`` default.
 
         Returns
         -------
@@ -221,15 +236,27 @@ class BinaryIdealOracle:
 
         horizon = self._bars_to_friday_close(idx)
 
-        # Buy direction
-        buy_tp = current_price + tp_pips * pip_cost
+        # Compute cost buffer in pips — use received costs if provided,
+        # otherwise fall back to the configured default.
+        if spread_pips > 0 or commission_per_lot > 0 or slippage_pips > 0:
+            # Commission per lot ($7 / 100K) → pips:  $7 / (100000 * 0.00001) = 7
+            # That's per standard lot. Per pip_cost unit it's:
+            # commission_pips = commission_per_lot / (100000 * pip_cost)
+            commission_pips = commission_per_lot / (100000 * pip_cost) if pip_cost > 0 else 0
+            # Round-trip costs: spread + slippage + commission (×2 for entry+exit)
+            cost_pips = spread_pips + slippage_pips + commission_pips * 2
+        else:
+            cost_pips = self.params["spread_cost_pips"]
+
+        # Buy direction — TP must be higher to cover costs
+        buy_tp = current_price + (tp_pips + cost_pips) * pip_cost
         buy_sl = current_price - sl_pips * pip_cost
         buy_binary = self._maybe_flip(
             self._scan_tp_sl(idx, buy_tp, buy_sl, horizon, "buy")
         )
 
-        # Sell direction
-        sell_tp = current_price - tp_pips * pip_cost
+        # Sell direction — TP must be lower to cover costs
+        sell_tp = current_price - (tp_pips + cost_pips) * pip_cost
         sell_sl = current_price + sl_pips * pip_cost
         sell_binary = self._maybe_flip(
             self._scan_tp_sl(idx, sell_tp, sell_sl, horizon, "sell")
@@ -238,6 +265,7 @@ class BinaryIdealOracle:
         return {
             "buy_entry_binary": buy_binary,
             "sell_entry_binary": sell_binary,
+            "bars_remaining": horizon,
             "timestamp": self._data.index[idx].isoformat(),
             "current_price": current_price,
         }
@@ -296,6 +324,8 @@ class BinaryIdealOracle:
             "exit_directions": ["buy", "sell"],
             "prediction_scope": "weekly",
             "noise_probability": self.params["noise_probability"],
+            "required_columns": ["OPEN", "HIGH", "LOW", "CLOSE"],
+            "accepts_ohlc_window": False,
         }
 
     # ------------------------------------------------------------------

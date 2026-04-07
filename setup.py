@@ -20,7 +20,10 @@ setup(
         'predictor.plugins': [
             'default_predictor=plugins_predictor.default_predictor:DefaultPredictor',
             'noisy_ideal_predictor=plugins_predictor.noisy_ideal_predictor:NoisyIdealPredictor',
-            'binary_ideal_oracle=plugins_predictor.binary_ideal_oracle:BinaryIdealOracle'
+            'binary_ideal_oracle=plugins_predictor.binary_ideal_oracle:BinaryIdealOracle',
+            'binary_entry_predictor=plugins_predictor.binary_entry_predictor:BinaryEntryPredictor',
+            'binary_exit_predictor=plugins_predictor.binary_exit_predictor:BinaryExitPredictor',
+            'binary_predictor=plugins_predictor.binary_predictor:BinaryPredictor'
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [

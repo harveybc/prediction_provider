@@ -55,6 +55,22 @@ class EntryPredictRequest(BaseModel):
         description="Stop-loss distance in pips.",
         json_schema_extra={"example": 10.0},
     )
+    # Trading costs from HS so oracle can compute exact cost buffer
+    spread_pips: float = Field(
+        default=0.0,
+        description="Broker spread in pips (0 = use oracle default).",
+        json_schema_extra={"example": 2.0},
+    )
+    commission_per_lot: float = Field(
+        default=0.0,
+        description="Commission per standard lot (100K units) in USD (0 = use oracle default).",
+        json_schema_extra={"example": 7.0},
+    )
+    slippage_pips: float = Field(
+        default=0.0,
+        description="Expected slippage in pips (0 = use oracle default).",
+        json_schema_extra={"example": 1.0},
+    )
 
 
 class EntryPredictResponse(BaseModel):
@@ -66,6 +82,22 @@ class EntryPredictResponse(BaseModel):
     sell_entry_binary: int = Field(
         description="1 = sell TP predicted to be hit before sell SL this week, 0 = otherwise.",
         json_schema_extra={"example": 0},
+    )
+    bars_remaining: int = Field(
+        default=0,
+        description="Number of bars until Friday close (weekly horizon). Fewer bars = higher confidence.",
+        json_schema_extra={"example": 48},
+    )
+    buy_confidence: float = Field(
+        default=1.0,
+        description="Confidence of buy prediction (1.0 = fully confident, 0.0 = no confidence). "
+                    "Oracle always returns 1.0; Bayesian models return 1 - k*std.",
+        json_schema_extra={"example": 1.0},
+    )
+    sell_confidence: float = Field(
+        default=1.0,
+        description="Confidence of sell prediction. Same semantics as buy_confidence.",
+        json_schema_extra={"example": 1.0},
     )
 
 
@@ -101,6 +133,12 @@ class ExitPredictResponse(BaseModel):
         description="1 = TP still expected (keep open), 0 = TP unlikely (close early).",
         json_schema_extra={"example": 1},
     )
+    exit_confidence: float = Field(
+        default=1.0,
+        description="Confidence of exit prediction (1.0 = fully confident). "
+                    "Oracle always returns 1.0; Bayesian models return 1 - k*std.",
+        json_schema_extra={"example": 1.0},
+    )
 
 
 # --- Model info ---
@@ -113,6 +151,16 @@ class ModelInfoResponse(BaseModel):
     entry_directions: list = Field(json_schema_extra={"example": ["buy", "sell"]})
     exit_directions: list = Field(json_schema_extra={"example": ["buy", "sell"]})
     prediction_scope: str = Field(json_schema_extra={"example": "weekly"})
+    required_columns: list = Field(
+        default=["OPEN", "HIGH", "LOW", "CLOSE"],
+        description="OHLC columns the model requires in the data window.",
+        json_schema_extra={"example": ["OPEN", "HIGH", "LOW", "CLOSE"]},
+    )
+    accepts_ohlc_window: bool = Field(
+        default=False,
+        description="Whether the predictor can process an OHLC window sent in the request.",
+        json_schema_extra={"example": False},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +204,8 @@ async def model_info():
         "entry_directions": ["buy", "sell"],
         "exit_directions": [],
         "prediction_scope": "unknown",
+        "required_columns": ["OPEN", "HIGH", "LOW", "CLOSE"],
+        "accepts_ohlc_window": False,
     }
 
 
@@ -190,12 +240,20 @@ async def predict_entry(req: EntryPredictRequest):
 
     if hasattr(predictor, "predict_entry"):
         try:
-            result = predictor.predict_entry(ts, tp_pips=req.tp, sl_pips=req.sl)
+            result = predictor.predict_entry(
+                ts, tp_pips=req.tp, sl_pips=req.sl,
+                spread_pips=req.spread_pips,
+                commission_per_lot=req.commission_per_lot,
+                slippage_pips=req.slippage_pips,
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Entry prediction failed: {e}")
         return {
             "buy_entry_binary": int(result.get("buy_entry_binary", 0)),
             "sell_entry_binary": int(result.get("sell_entry_binary", 0)),
+            "bars_remaining": int(result.get("bars_remaining", 0)),
+            "buy_confidence": float(result.get("buy_confidence", 1.0)),
+            "sell_confidence": float(result.get("sell_confidence", 1.0)),
         }
 
     raise HTTPException(status_code=501, detail="Predictor does not support predict_entry")
@@ -235,7 +293,10 @@ async def predict_exit(req: ExitPredictRequest):
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Exit prediction failed: {e}")
-        return {"exit_binary": int(result.get("exit_binary", 0))}
+        return {
+            "exit_binary": int(result.get("exit_binary", 0)),
+            "exit_confidence": float(result.get("exit_confidence", 1.0)),
+        }
 
     raise HTTPException(status_code=501, detail="Predictor does not support predict_exit")
 
