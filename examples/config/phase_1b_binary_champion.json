@@ -1,0 +1,26 @@
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "reload": false,
+    "workers": 1,
+    "database_url": "sqlite:///prediction_provider.db",
+    "auth_type": "none",
+    "cors_enabled": true,
+    "allowed_origins": ["*"],
+
+    "core_plugin": "sync_core",
+    "feeder_plugin": "default_feeder",
+    "pipeline_plugin": "default_pipeline",
+    "predictor_plugin": "binary_entry_predictor",
+
+    "model_path": "/home/harveybc/Documents/GitHub/predictor/examples/results/phase_1b_binary/champion_model.keras",
+    "csv_file": "/home/harveybc/Documents/GitHub/predictor/examples/data_downsampled/phase_1_b/normalized_d6.csv",
+    "window_size": 124,
+    "mc_samples": 0,
+    "confidence_threshold": 0.5,
+    "normalization_params_path": null,
+    "use_ideal_buy_exit": true,
+
+    "enable_logging": true,
+    "log_level": "INFO"
+}

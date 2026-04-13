@@ -55,6 +55,7 @@ class BinaryEntryPredictor:
         "prediction_horizon": 120,
         "friday_close_hour": 20,
         "normalization_params_path": None,
+        "use_ideal_buy_exit": False,
     }
 
     plugin_debug_vars = [
@@ -100,17 +101,21 @@ class BinaryEntryPredictor:
     # ------------------------------------------------------------------
 
     def load_model(self, model_path: str):
-        """Load a pre-trained Keras model for entry prediction."""
+        """Load a pre-trained Keras model for entry prediction.
+
+        The .keras file is a zip containing model.weights.h5 and config.json.
+        Lambda layers with closures (e.g. positional encoding) cannot be
+        deserialized directly in Keras 3, so we rebuild the architecture from
+        the config inside the zip and load weights separately.
+        """
         import tensorflow as tf
+        import zipfile
+        import tempfile
 
         if not _os.path.exists(model_path):
             raise FileNotFoundError(f"Model file not found: {model_path}")
 
-        self._model = tf.keras.models.load_model(model_path)
-        if not _QUIET:
-            print(f"[BinaryEntryPredictor] Loaded model from {model_path}")
-
-        # Load metadata (feature_columns, window_size) produced by predictor repo
+        # 1) Load metadata first (feature_columns, window_size)
         base = model_path.rsplit('.', 1)[0]
         meta_path = base + '_metadata.json'
         if _os.path.exists(meta_path):
@@ -124,11 +129,154 @@ class BinaryEntryPredictor:
                 print(f"[BinaryEntryPredictor] Metadata: window={self.params['window_size']}, "
                       f"features={len(self._feature_cols)}")
 
+        # 2) Extract architecture params from the .keras zip config.json
+        arch_params = self._extract_arch_params(model_path)
+
+        # 3) Rebuild model architecture using the predictor repo's TFT plugin
+        window_size = int(self.params['window_size'])
+        n_features = len(self._feature_cols) if self._feature_cols else arch_params.get('n_features', 22)
+        self._model = self._build_model_architecture(
+            window_size, n_features, arch_params)
+
+        # 4) Load weights from the .keras zip
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with zipfile.ZipFile(model_path, 'r') as zf:
+                zf.extractall(tmpdir)
+            weights_path = _os.path.join(tmpdir, 'model.weights.h5')
+            if not _os.path.exists(weights_path):
+                raise FileNotFoundError(
+                    f"No model.weights.h5 inside {model_path}")
+            self._model.load_weights(weights_path)
+
+        if not _QUIET:
+            print(f"[BinaryEntryPredictor] Loaded model from {model_path} "
+                  f"(rebuilt architecture + weights)")
+
         # Load normalization params if available
         norm_path = self.params.get("normalization_params_path")
         if norm_path and _os.path.exists(norm_path):
             with open(norm_path) as f:
                 self._normalization_params = json.load(f)
+
+    @staticmethod
+    def _extract_arch_params(keras_path: str) -> dict:
+        """Read config.json inside a .keras zip to infer architecture params."""
+        import zipfile
+        with zipfile.ZipFile(keras_path, 'r') as zf:
+            config = json.loads(zf.read('config.json'))
+        layers = config.get('config', {}).get('layers', [])
+        params: Dict[str, Any] = {}
+        units_set = set()
+        lstm_count = 0
+        has_positional = False
+        for layer in layers:
+            cls = layer.get('class_name', '')
+            cfg = layer.get('config', {})
+            if cls == 'Dense' and cfg.get('name', '').startswith('dense'):
+                units_set.add(cfg.get('units'))
+            elif cls == 'LSTM':
+                lstm_count += 1
+                units_set.add(cfg.get('units'))
+            elif cls == 'MultiHeadAttention':
+                params['num_heads'] = cfg.get('num_heads', 2)
+            elif cls == 'Dropout':
+                params.setdefault('dropout', cfg.get('rate', 0.1))
+            elif cls == 'Lambda':
+                has_positional = True
+                build_cfg = cfg.get('build_config', {})
+                input_shape = build_cfg.get('input_shape', [None, 124, 22])
+                if input_shape and len(input_shape) == 3:
+                    params['n_features'] = input_shape[2]
+            elif cls == 'InputLayer':
+                shape = cfg.get('batch_shape', [None, 124, 22])
+                if shape and len(shape) == 3:
+                    params['n_features'] = shape[2]
+        # Hidden units = most common Dense unit count (exclude output)
+        units_set.discard(1)  # output layer
+        if units_set:
+            params['hidden_units'] = max(units_set, key=lambda u: sum(
+                1 for l in layers
+                if l.get('config', {}).get('units') == u))
+        params['lstm_layers'] = lstm_count
+        params['positional_encoding'] = has_positional
+        return params
+
+    @staticmethod
+    def _build_model_architecture(window_size: int, n_features: int,
+                                   arch: dict):
+        """Rebuild TFT binary model architecture (matching predictor repo)."""
+        from tensorflow.keras.layers import (
+            Input, Dense, Lambda, Add, LSTM,
+            LayerNormalization, MultiHeadAttention, Multiply, Dropout,
+        )
+        from tensorflow.keras.models import Model
+        from tensorflow.keras.regularizers import l2
+
+        units = int(arch.get('hidden_units', 64))
+        num_heads = int(arch.get('num_heads', 2))
+        dropout_rate = float(arch.get('dropout', 0.1))
+        lstm_layers = int(arch.get('lstm_layers', 2))
+        l2_val = 1e-6
+        use_pe = arch.get('positional_encoding', True)
+
+        def _glu(x, u, l2v):
+            val = Dense(u, activation=None, kernel_regularizer=l2(l2v))(x)
+            gate = Dense(u, activation='sigmoid', kernel_regularizer=l2(l2v))(x)
+            return Multiply()([val, gate])
+
+        def _grn(x, u, dr, l2v):
+            skip = x
+            if x.shape[-1] != u:
+                skip = Dense(u, kernel_regularizer=l2(l2v))(x)
+            h = Dense(u, activation='elu', kernel_regularizer=l2(l2v))(x)
+            h = Dense(u, kernel_regularizer=l2(l2v))(h)
+            h = Dropout(dr)(h)
+            h = _glu(h, u, l2v)
+            h = Add()([skip, h])
+            h = LayerNormalization()(h)
+            return h
+
+        inputs = Input(shape=(window_size, n_features), name='input_layer')
+        if use_pe:
+            pe_matrix = np.zeros((1, window_size, n_features), dtype=np.float32)
+            for pos in range(window_size):
+                for i in range(0, n_features, 2):
+                    denom = 10000 ** (i / n_features)
+                    pe_matrix[0, pos, i] = np.sin(pos / denom)
+                    if i + 1 < n_features:
+                        pe_matrix[0, pos, i + 1] = np.cos(pos / denom)
+            import tensorflow as _tf
+            pe_const = _tf.constant(pe_matrix, dtype=_tf.float32)
+            x = Lambda(lambda t, pes=pe_const: t + pes,
+                       name='add_positional_encoding')(inputs)
+        else:
+            x = inputs
+
+        x = _grn(x, units, dropout_rate, l2_val)
+        for i in range(lstm_layers):
+            x = LSTM(units, return_sequences=True, dropout=dropout_rate,
+                     kernel_regularizer=l2(l2_val),
+                     name=f'lstm_enc_{i+1}')(x)
+            x = _grn(x, units, dropout_rate, l2_val)
+
+        attn_out = MultiHeadAttention(
+            num_heads=num_heads, key_dim=units,
+            name='self_mha')(x, x)
+        h = _grn(attn_out, units, dropout_rate, l2_val)
+        h = Add()([x, h])
+        h = LayerNormalization()(h)
+
+        # Last timestep
+        context = Lambda(lambda t: t[:, -1, :])(h)
+
+        # Binary output head
+        head = _grn(context, units, dropout_rate, l2_val)
+        output = Dense(1, activation='sigmoid',
+                       name='output_horizon_1')(head)
+
+        model = Model(inputs=inputs, outputs=[output],
+                      name='BinaryTFT_buy_entry')
+        return model
 
     # ------------------------------------------------------------------
     # Data loading
@@ -176,7 +324,11 @@ class BinaryEntryPredictor:
         if idx < 0:
             idx = 0
 
-        current_price = float(self._data.iloc[idx][self.params['close_column']])
+        close_col = self.params['close_column']
+        if close_col in self._data.columns:
+            current_price = float(self._data.iloc[idx][close_col])
+        else:
+            current_price = 0.0
         bars_remaining = self._bars_to_friday_close(idx)
 
         # No model loaded → neutral
@@ -209,23 +361,22 @@ class BinaryEntryPredictor:
                 self._model(X_input, training=True).numpy()
                 for _ in range(self.params['mc_samples'])
             ])
-            mean_pred = preds.mean(axis=0)[0]
-            std_pred = preds.std(axis=0)[0]
+            mean_pred = preds.mean(axis=0).flatten()
+            std_pred = preds.std(axis=0).flatten()
+            buy_prob = float(mean_pred[0])
             buy_conf = float(max(0.0, 1.0 - 2.0 * std_pred[0]))
-            sell_conf = float(max(0.0, 1.0 - 2.0 * std_pred[1]))
         else:
             pred = self._model.predict(X_input, verbose=0)
-            mean_pred = pred[0]
+            buy_prob = float(np.asarray(pred).flatten()[0])
             buy_conf = 1.0
-            sell_conf = 1.0
 
         threshold = float(self.params['confidence_threshold'])
         return {
-            "buy_entry_binary": 1.0 if mean_pred[0] >= threshold else 0.0,
-            "sell_entry_binary": 1.0 if mean_pred[1] >= threshold else 0.0,
+            "buy_entry_binary": 1.0 if buy_prob >= threshold else 0.0,
+            "sell_entry_binary": 1.0 if (1.0 - buy_prob) >= threshold else 0.0,
             "bars_remaining": bars_remaining,
             "buy_confidence": buy_conf,
-            "sell_confidence": sell_conf,
+            "sell_confidence": buy_conf,
             "timestamp": str(ts),
             "current_price": current_price,
         }
@@ -236,10 +387,44 @@ class BinaryEntryPredictor:
 
     def predict_exit(self, timestamp, direction: str,
                      tp_price: float, sl_price: float) -> Dict[str, Any]:
-        """Stub: keep-open. Use BinaryExitPredictor or BinaryPredictor for exit."""
+        """Return exit prediction.
+
+        When *use_ideal_buy_exit* is True, the actual exit label from the
+        dataset is returned (perfect foresight baseline).  Uses
+        buy_exit_label for buy direction, sell_exit_label for sell.
+        Otherwise falls back to keep-open stub.
+        """
+        ts = pd.Timestamp(timestamp)
+
+        # Ideal exit: look up the ground-truth label
+        use_ideal = self.params.get('use_ideal_buy_exit', False)
+
+        if use_ideal and self._data is not None:
+            label_col = None
+            if direction == 'buy' and 'buy_exit_label' in self._data.columns:
+                label_col = 'buy_exit_label'
+            elif direction == 'sell' and 'sell_exit_label' in self._data.columns:
+                label_col = 'sell_exit_label'
+
+            if label_col is not None:
+                idx = self._data.index.get_indexer([ts], method='ffill')[0]
+                if idx < 0:
+                    idx = 0
+                label = float(self._data.iloc[idx][label_col])
+                # label==1 means "TP still reachable" → keep open (exit_binary=1)
+                # label==0 means "TP not reachable"   → close     (exit_binary=0)
+                exit_bin = 1.0 if label >= 0.5 else 0.0
+                return {
+                    "exit_binary": exit_bin,
+                    "exit_confidence": 1.0,
+                    "timestamp": str(ts),
+                    "current_price": 0.0,
+                }
+
+        # Default stub: keep open
         return {
             "exit_binary": 1.0, "exit_confidence": 1.0,
-            "timestamp": str(pd.Timestamp(timestamp)), "current_price": 0.0,
+            "timestamp": str(ts), "current_price": 0.0,
         }
 
     # ------------------------------------------------------------------
