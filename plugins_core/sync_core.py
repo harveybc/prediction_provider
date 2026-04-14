@@ -302,6 +302,60 @@ async def predict_exit(req: ExitPredictRequest):
 
 
 # ---------------------------------------------------------------------------
+# Noise control & metrics endpoints
+# ---------------------------------------------------------------------------
+
+class SetNoiseRequest(BaseModel):
+    """Request to update noise_std on the running predictor."""
+    noise_std: float = Field(
+        ..., description="Gaussian noise standard deviation (0.0 = perfect oracle).",
+        json_schema_extra={"example": 0.3},
+    )
+
+
+class MetricsResponse(BaseModel):
+    """Confusion-matrix metrics of noisy predictions vs true oracle."""
+    tp: int = 0
+    fp: int = 0
+    tn: int = 0
+    fn: int = 0
+    total_predictions: int = 0
+    precision: float = 0.0
+    recall: float = 0.0
+    f1: float = 0.0
+    accuracy: float = 0.0
+    noise_std: float = 0.0
+
+
+@app.post(
+    "/api/v1/predict/set_noise",
+    tags=["noise"],
+    summary="Set noise_std and reset metrics counters",
+)
+async def set_noise(req: SetNoiseRequest):
+    """Update noise_std on the loaded predictor and reset F1 counters."""
+    predictor = _get_predictor()
+    predictor.set_params(noise_std=req.noise_std)
+    if hasattr(predictor, "reset_metrics"):
+        predictor.reset_metrics()
+    return {"noise_std": req.noise_std, "status": "ok"}
+
+
+@app.get(
+    "/api/v1/predict/metrics",
+    response_model=MetricsResponse,
+    tags=["noise"],
+    summary="Get F1 / precision / recall metrics",
+)
+async def get_metrics():
+    """Return confusion-matrix metrics accumulated since last reset."""
+    predictor = _get_predictor()
+    if hasattr(predictor, "get_metrics"):
+        return predictor.get_metrics()
+    raise HTTPException(status_code=501, detail="Predictor does not support get_metrics")
+
+
+# ---------------------------------------------------------------------------
 # Core plugin class
 # ---------------------------------------------------------------------------
 

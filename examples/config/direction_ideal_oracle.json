@@ -1,0 +1,25 @@
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "reload": false,
+    "workers": 1,
+    "database_url": "sqlite:///prediction_provider.db",
+    "auth_type": "none",
+    "cors_enabled": true,
+    "allowed_origins": ["*"],
+
+    "core_plugin": "sync_core",
+    "feeder_plugin": "default_feeder",
+    "pipeline_plugin": "default_pipeline",
+    "predictor_plugin": "direction_ideal_oracle",
+
+    "csv_file": "/home/harveybc/Documents/GitHub/heuristic-strategy/tests/data/phase_2_3_base_d3.csv",
+    "prediction_horizon_long": 24,
+    "prediction_horizon_short": 3,
+    "atr_period": 14,
+    "noise_std": 0.0,
+    "noise_seed": 42,
+
+    "enable_logging": true,
+    "log_level": "INFO"
+}
