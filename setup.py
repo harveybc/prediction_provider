@@ -25,7 +25,8 @@ setup(
             'binary_exit_predictor=plugins_predictor.binary_exit_predictor:BinaryExitPredictor',
             'binary_predictor=plugins_predictor.binary_predictor:BinaryPredictor',
             'direction_predictor=plugins_predictor.direction_predictor:DirectionPredictor',
-            'direction_ideal_oracle=plugins_predictor.direction_ideal_oracle:DirectionIdealOracle'
+            'direction_ideal_oracle=plugins_predictor.direction_ideal_oracle:DirectionIdealOracle',
+            'csv_direction_predictor=plugins_predictor.csv_direction_predictor:CsvDirectionPredictor'
         ],
         # API endpoints plugins - Definen endpoints RESTful individuales
         'endpoints.plugins': [

@@ -1,0 +1,11 @@
+{
+    "core_plugin": "sync_core",
+    "predictor_plugin": "csv_direction_predictor",
+    "long_predictions_csv": "../predictor/examples/results/phase_1c_direction/phase_1c_direction_cnn_direction_long_inference_prediction.csv",
+    "short_predictions_csv": "../predictor/examples/results/phase_1c_direction/phase_1c_direction_cnn_direction_short_inference_prediction.csv",
+    "csv_file": "examples/data/phase_1c_direction_test_ohlc.csv",
+    "confidence_threshold": 0.55,
+    "host": "127.0.0.1",
+    "port": 8000,
+    "quiet_mode": true
+}
