@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prediction-provider-mechanics"
+version = "0.1.0"
+description = "Provider-owned deterministic mechanics policy and hash-verified artifact loading emitting canonical AssetIntent (L0 demo-trading vertical, ruling R1)."
+requires-python = ">=3.12"
+dependencies = ["trading-contracts", "pydantic>=2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
