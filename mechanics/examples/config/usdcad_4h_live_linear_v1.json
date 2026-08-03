@@ -1,7 +1,7 @@
 {
   "schema": "prediction_provider.live_linear_training.v1",
   "model_id": "usdcad-4h-linear-live-v1",
-  "asset_id": "fx:USDCAD",
+  "asset_id": "fx:USD/CAD",
   "timeframe": "4h",
   "data": {
     "input_file": "~/Documents/GitHub/financial-data/experiments/stage_a_screening/inputs/usdcad/4h/kitchen_sink_guarded/train.csv",
