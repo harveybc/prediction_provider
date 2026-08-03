@@ -1,0 +1,17 @@
+{
+  "schema": "prediction_provider.live_linear_training.v1",
+  "model_id": "spy-daily-linear-live-v1",
+  "asset_id": "equity:SPY",
+  "timeframe": "1d",
+  "data": {
+    "input_file": "~/.local/share/lts/live-data/alpaca_iex_spy_1d.csv",
+    "columns": {"time": "DateTime", "open": "Open", "high": "High", "low": "Low", "close": "Close", "volume": "Volume"}
+  },
+  "split": {"train_end": "2024-12-31", "validation_end": "2025-12-31"},
+  "search": {"c_values": [0.01, 0.1, 1.0, 10.0], "probability_thresholds": [0.50, 0.52, 0.55, 0.58]},
+  "evaluation": {"periods_per_week": 5, "round_trip_cost_bps": 8.0, "minimum_validation_trades": 12, "minimum_active_fraction": 0.8},
+  "output": {
+    "artifact_file": "~/.local/share/prediction-provider/live/spy_daily_linear_v1/model.json",
+    "manifest_file": "~/.local/share/prediction-provider/live/spy_daily_linear_v1/manifest.json"
+  }
+}

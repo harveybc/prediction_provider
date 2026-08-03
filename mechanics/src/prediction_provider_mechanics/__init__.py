@@ -15,12 +15,20 @@ is reported to the auditor; resolving it belongs to the pre-L2 service
 integration.
 """
 from .loader import ArtifactVerificationError, verify_artifact
+from .live_linear_policy import (
+    LiveLinearPolicy,
+    LiveLinearPolicyError,
+    build_closed_bar_features,
+)
 from .policy import MechanicsPolicy, MechanicsPolicyConfig, MechanicsPolicyError
 
 __all__ = [
     "ArtifactVerificationError",
+    "LiveLinearPolicy",
+    "LiveLinearPolicyError",
     "MechanicsPolicy",
     "MechanicsPolicyConfig",
     "MechanicsPolicyError",
     "verify_artifact",
+    "build_closed_bar_features",
 ]
