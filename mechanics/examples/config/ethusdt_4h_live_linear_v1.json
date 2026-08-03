@@ -1,0 +1,17 @@
+{
+  "schema": "prediction_provider.live_linear_training.v1",
+  "model_id": "ethusdt-4h-linear-live-v1",
+  "asset_id": "crypto:ETHUSD",
+  "timeframe": "4h",
+  "data": {
+    "input_file": "~/Documents/GitHub/financial-data/experiments/stage_a_screening/inputs/ethusdt/4h/baseline_12/train.csv",
+    "columns": {"time": "DATE_TIME", "open": "OPEN", "high": "HIGH", "low": "LOW", "close": "CLOSE", "volume": "VOLUME"}
+  },
+  "split": {"train_end": "2022-12-31", "validation_end": "2023-12-31"},
+  "search": {"c_values": [0.01, 0.1, 1.0, 10.0], "probability_thresholds": [0.50, 0.52, 0.55, 0.58]},
+  "evaluation": {"periods_per_week": 42, "round_trip_cost_bps": 40.0, "minimum_validation_trades": 20, "minimum_active_fraction": 0.8},
+  "output": {
+    "artifact_file": "~/.local/share/prediction-provider/live/ethusdt_4h_linear_v1/model.json",
+    "manifest_file": "~/.local/share/prediction-provider/live/ethusdt_4h_linear_v1/manifest.json"
+  }
+}

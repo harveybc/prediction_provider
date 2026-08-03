@@ -16,6 +16,7 @@ integration.
 """
 from .loader import ArtifactVerificationError, verify_artifact
 from .live_linear_policy import (
+    FEATURE_NAMES,
     LiveLinearPolicy,
     LiveLinearPolicyError,
     build_closed_bar_features,
@@ -24,6 +25,7 @@ from .policy import MechanicsPolicy, MechanicsPolicyConfig, MechanicsPolicyError
 
 __all__ = [
     "ArtifactVerificationError",
+    "FEATURE_NAMES",
     "LiveLinearPolicy",
     "LiveLinearPolicyError",
     "MechanicsPolicy",
