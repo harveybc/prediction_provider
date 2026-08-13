@@ -1,7 +1,7 @@
 # Prediction Provider
 
-A plugin-based FastAPI service that serves financial time-series predictions
-over HTTP. It loads predictor plugins (Keras/ONNX model wrappers, ideal
+A plugin-based FastAPI service that serves financial time-series model inference
+over HTTP. It loads predictor(or decision making models) plugins (Keras/ONNX model wrappers, ideal
 oracles, CSV replay), feeds them through a configurable feeder → pipeline →
 predictor chain, and exposes prediction, health, info and metrics endpoints
 with multi-role authentication, billing/marketplace records and SQL
