@@ -5,8 +5,8 @@ over HTTP. It loads predictor plugins (Keras/ONNX model wrappers, ideal
 oracles, CSV replay), feeds them through a configurable feeder → pipeline →
 predictor chain, and exposes prediction, health, info and metrics endpoints
 with multi-role authentication, billing/marketplace records and SQL
-persistence. It is the serving seam between the model-training repositories
-and the execution side of the stack.
+persistence. It sits between the model-training repositories and the
+execution side of the stack.
 
 ## Status
 
@@ -18,6 +18,19 @@ and the execution side of the stack.
 **Trading status:** this service only serves predictions; its consumers run
 in **simulation and paper/demo venues only** — real capital is not enabled
 anywhere in this stack, and nothing here is financial advice.
+
+## Run this with an AI agent
+
+Paste this into Claude Code, Cursor, Codex, GitHub Copilot or any coding agent
+with shell access:
+
+> Read `AGENTS.md` in this repository and follow the **Agent quickstart**
+> section end to end: set up the environment, run the smoke test, execute the
+> example oracle-predictor service run, then tell me the exact URL or file
+> paths where I can see the results and one query I should try first.
+
+`AGENTS.md` is the [agents.md](https://agents.md) convention, read natively by
+most coding agents.
 
 ## Role and non-responsibilities
 
@@ -82,8 +95,12 @@ Consumers of this service:
 - Key dependencies (from `install_requires`): `fastapi`, `uvicorn`,
   `flask`, `pandas`, `numpy`, `scikit-learn`, `tensorflow`, `onnxruntime`,
   `pyjwt`, `sqlalchemy`.
-- The `yfinance`-backed feeder path needs `yfinance` installed (not listed
-  in `install_requires`; its tests fail collection without it).
+- `yfinance` is required to **boot the service at all**, not only for the
+  `yfinance`-backed feeder path: `plugins_feeder/__init__.py` imports
+  `real_feeder` → `data_fetcher`, which does an unguarded `import yfinance`,
+  and `app/main.py` exits 1 when a plugin fails to load. It is listed in
+  `requirements.txt` but not in `setup.py`'s `install_requires`; without it,
+  five test files also fail collection.
 
 ## Installation
 
@@ -112,17 +129,33 @@ plugin-selection flags, output/remote-config options). Importing the
 application (`PYTHONPATH=./ python -c "import app.main"`) was also verified
 and logs `All endpoint routers successfully registered`.
 
-To boot the server with the repository-owned config (unverified execution):
+To boot the server against a committed fixture with no model artifact and no
+network access:
 
 ```bash
-PYTHONPATH=./ python app/main.py --load_config examples/config/default_config.json
+PYTHONPATH=./ python app/main.py \
+  --load_config examples/config/direction_ideal_oracle.json \
+  --csv_file examples/data/phase_1c_direction_test_ohlc.csv \
+  --host 127.0.0.1 --port 8000
 ```
 
-Caveat: `default_config.json` currently points `data_file_path` at
-`examples/data/phase_3/base_d1.csv`, which is not present (the committed
-files are `base_d2/d3/d5/d6.csv`); adjust that key to an existing CSV
-before booting. Example request payloads are in
-[`examples/requests/`](examples/requests/).
+Verified (with `yfinance` importable): `/health` returns `{"status":"ok"}`,
+`/docs`, `/redoc` and `/openapi.json` return `200`, and
+`POST /api/v1/predict/entry` with
+`{"datetime":"03.12.2018 08:00:00.000","tp":50,"sl":25}` returns
+`{"buy_entry_binary":0,"sell_entry_binary":1,"bars_remaining":2,...}`. The two
+overrides are needed because the committed config points `csv_file` at a path
+in a sibling repository and sets `host` to `0.0.0.0`.
+
+Caveats for the other configs: `default_config.json` points `data_file_path`
+at `examples/data/phase_3/base_d1.csv`, which is not present (the committed
+files are `base_d2/d3/d5/d6.csv`); adjust that key to an existing CSV before
+booting. Example request payloads are in
+[`examples/requests/`](examples/requests/); the committed `.http` file also
+references the missing `base_d1.csv`.
+
+For an agent-executable version of this recipe, see
+[`AGENTS.md`](AGENTS.md).
 
 ## Configuration and plugin reference
 
@@ -135,16 +168,18 @@ documentation: [`REFERENCE_plugins.md`](REFERENCE_plugins.md).
 ## Tests and validation
 
 ```bash
-python -m pytest -q --collect-only            # root suite
-python -m pytest -q --collect-only            # in mechanics/
+PYTHONPATH=./ python -m pytest -q --collect-only     # root suite
+cd mechanics && python -m pytest -q                  # nested package
 ```
 
 Observed results (Python 3.12.13):
 
-- Root: `178 tests collected, 5 errors` — all five collection errors are
-  `ModuleNotFoundError: No module named 'yfinance'` (optional feeder
-  dependency not installed in the verification environment).
-- Mechanics: `19 tests collected` (clean), and
+- Root, without `yfinance`: `178 tests collected, 5 errors` — all five
+  collection errors are `ModuleNotFoundError: No module named 'yfinance'`.
+- Root, with `yfinance` importable: `192 tests collected`, clean.
+- Root unit subset excluding the two feeder test files: `40 passed`, no
+  `yfinance` needed.
+- Mechanics: `19 passed`, and
   `from prediction_provider_mechanics import policy, loader` imports OK.
 
 Test suites are organized under [`tests/`](tests/) (unit, integration,
@@ -152,8 +187,10 @@ system, acceptance, behavioral, security, production).
 
 ## Artifacts, data and outputs
 
-- Persistence defaults to SQLite via `database_url`
-  (e.g. `sqlite:///prediction_provider.db`); predictions, users, roles and
+- Persistence is SQLite. Note that `app/database.py` hard-codes
+  `sqlite:///./prediction_provider.db`: the `database_url` config key is
+  parsed and merged but is not wired to the engine, so the database file
+  follows the process working directory. Predictions, users, roles and
   billing records live there.
 - Served model artifacts are external inputs referenced by config; the
   mechanics package verifies artifact hashes before loading.
@@ -175,10 +212,14 @@ system, acceptance, behavioral, security, production).
 - **Undocumented-by-packaging `mechanics/` package.** It is a separate
   project inside the repo, absent from the root `setup.py`; install it
   explicitly if you need contract-typed mechanics.
-- **Entry-point group collision.** The unqualified `feeder.plugins` group
-  name is also claimed by the legacy
-  [timeseries-gan](https://github.com/harveybc/timeseries-gan) package;
-  installing both in one environment makes plugin discovery ambiguous.
+- **Entry-point group collision.** The unqualified group names are shared
+  with sibling projects: `feeder.plugins` is also claimed by the legacy
+  [timeseries-gan](https://github.com/harveybc/timeseries-gan) package, and in
+  a shared environment `predictor.plugins` and `pipeline.plugins` resolve to
+  the `predictor` and `agent-multi` distributions. `app/plugin_loader.py`
+  takes the first match in the group, so resolution depends on `sys.path`
+  order. Use a dedicated environment, or run from the repository root with
+  `PYTHONPATH=./` so the local `prediction_provider.egg-info` is found first.
 - **Root script sprawl and committed residue.** The repository root carries
   one-off analysis scripts (`analyze_column_ranges.py`,
   `compare_indicators.py`, `create_stoch_lookup.py`, `fast_test_check.py`),
@@ -189,7 +230,9 @@ system, acceptance, behavioral, security, production).
   documents) and run residue (`app.log`, `pp_server.log`,
   `prediction_provider.db`, `fe_replicated_output*.csv`). This README is
   the authoritative entry point; treat the rest as historical.
+- **`database_url` is not wired.** `app/database.py` hard-codes
+  `sqlite:///./prediction_provider.db`, so the config key has no effect and
+  the database path follows the process working directory.
 - The stale `data_file_path` in `default_config.json` (see the example
-  section) and the generic top-level `app` package name are known sharp
-  edges.
+  section) and the generic top-level `app` package name remain unfixed.
 - No LICENSE file currently exists in this repository.
