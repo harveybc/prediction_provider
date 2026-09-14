@@ -1,14 +1,26 @@
 # Prediction Provider
 
 A plugin-based FastAPI service that serves financial time-series model inference
-over HTTP. It loads predictor(or decision making models) plugins (Keras/ONNX model wrappers, ideal
+over HTTP. It loads prediction and decision-model plugins (Keras/ONNX model wrappers, ideal
 oracles, CSV replay), feeds them through a configurable feeder → pipeline →
 predictor chain, and exposes prediction, health, info and metrics endpoints
 with multi-role authentication, billing/marketplace records and SQL
-persistence. It is the serving seam between the model-training repositories
+persistence. It connects the model-training repositories
 and the execution side of the stack.
 
 ## Status
+
+**Evaluation guide (2026-09-14):** [AGENTS.md](AGENTS.md) documents the setup,
+available plugins and bounded checks. The
+[research repository map](https://github.com/harveybc/predictor/blob/master/docs/RESEARCH_STACK.md)
+places this API downstream of model training. The
+[doctoral proposal](https://github.com/harveybc/predictor/blob/master/docs/propuesta_doctoral_representaciones_temporales_modulares.pdf)
+concerns learning representations, not a claim that every serving plugin
+implements that architecture.
+
+Use recorded inputs for an offline evaluation. Some feeder configurations can
+fetch external data; do not call the entire application offline by assumption.
+Ideal-oracle plugins are evaluation controls, not deployable predictors.
 
 **ACTIVE — core repository.** Package `prediction_provider` version
 **0.1.0** ([`setup.py`](setup.py)); nested package
