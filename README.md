@@ -31,6 +31,15 @@ Ideal-oracle plugins are evaluation controls, not deployable predictors.
 in **simulation and paper/demo venues only** — real capital is not enabled
 anywhere in this stack, and nothing here is financial advice.
 
+## Use with a coding agent
+
+> Read AGENTS.md and this README. Inspect the installed model adapter and its
+> input/output contract. Start a separate local test service with fixtures,
+> never replace a running endpoint. Test one valid request and invalid-input
+> behavior; report model/artifact identities and response semantics. Do not
+> describe an offline oracle as a deployable predictor, or start a broker or
+> training job to demonstrate the serving API.
+
 ## Role and non-responsibilities
 
 **Owns**
