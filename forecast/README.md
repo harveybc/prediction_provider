@@ -34,6 +34,29 @@ never imports TensorFlow. Each invocation reloads the model, trading a few secon
 of startup for dependency isolation; no persistent service is started. Configure
 these environment variables before starting the M5PHET web process.
 
+### Persistent Local Deployment
+
+The verified native interpreter is now
+`$HOME/.local/share/m5phet/forecast-native-venv/bin/python`. It has a non-editable
+provider installation and preserves all 37 working dependency versions,
+including TensorFlow 2.21.0, Keras 3.15.0 and NumPy 2.5.1. Like the original
+environment, it inherits dependencies from the existing persistent native Conda
+base; retain that base without upgrades for exact replay. Nothing required by
+this native environment is located in `/tmp`.
+
+For the existing `$HOME/.local/share/m5phet/chat-venv` web deployment, set these
+in the operator's persistent launcher/service environment before starting it:
+
+```bash
+export CUDA_VISIBLE_DEVICES=""
+export M5PHET_FORECAST_PYTHON="$HOME/.local/share/m5phet/forecast-native-venv/bin/python"
+export M5PHET_FORECAST_BUNDLE="$HOME/.local/state/m5phet/forecast-household-dev-20260924"
+```
+
+The retained bundle and its state reference are unchanged; no export or training
+is needed. A fresh stable-chat/stable-native subprocess replay matches the
+recorded native forecast exactly: 0.5412255525588989 kW.
+
 Export is an explicit, offline one-time operation before starting chat. The
 source root is trusted executable owner code, never an untrusted upload. The
 run root is the existing `e1_household_successor_v3` directory. This requires
