@@ -193,3 +193,15 @@ def test_a_target_two_bundles_hold_is_refused_with_both_named(tmp_path):
         assert answer["refusal"] == STATE_REQUIRED
         assert first in answer["why"] and second in answer["why"] and "state_ref" in answer["why"]
     assert out["state_ref"] is None and provider._engine is None
+
+
+def test_the_fitted_combinations_are_one_pair_per_bundle():
+    """A union of targets and horizons admits a pair no bundle has; the combinations are what is fitted."""
+    from prediction_provider_forecast import ForecastProvider
+    provider = ForecastProvider()
+    if len(provider.known_states()) < 2:
+        pytest.skip("needs the two-bundle directory configured through M5PHET_FORECAST_BUNDLE")
+    combos = provider.chat_combinations()
+    assert {"target": "Global_active_power", "horizon": 60} in combos
+    assert {"target": "direction_long", "horizon": 1} in combos
+    assert {"target": "Global_active_power", "horizon": 1} not in combos

@@ -536,6 +536,15 @@ class ForecastProvider:
         return {"outputs": {target: {"status": "OK", "uncertainty": "none", "payload": payload}},
                 "population": copy.deepcopy(request["population"])}
 
+    def chat_combinations(self):
+        """The pairs that are actually fitted, one per bundle target and horizon.
+
+        The slots above are a UNION, and a union lets a router pair a target with a horizon that belongs to the other
+        bundle -- `Global_active_power` at 1, say, when 1 is the direction model's horizon. Each value is admissible and the
+        pair is nobody's. This is the list a router must match a question against before anyone presses run."""
+        return [{"target": target, "horizon": int(horizon)}
+                for bundle in self._bundles for target in bundle.targets for horizon in bundle.horizons]
+
     def chat_slots(self):
         """What these engines need, and the only values they have. The workbench resolves ordinary phrasing against exactly
         this, so a paraphrase can reach a model and an unsupported target or horizon cannot.
