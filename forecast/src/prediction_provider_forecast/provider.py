@@ -256,15 +256,43 @@ class ForecastProvider:
         return {"outputs": {target: {"status": "OK", "uncertainty": "none", "payload": payload}},
                 "population": copy.deepcopy(request["population"])}
 
-    def chat_request(self, prompt, data, config):
+    def chat_slots(self):
+        """What this engine needs, and the only values it has. The workbench resolves ordinary phrasing against exactly
+        this, so a paraphrase can reach the model and an unsupported target or horizon cannot."""
+        if self._manifest is None:
+            return []
+        targets, horizons = self._manifest["targets"], self._manifest["horizons"]
+        aliases = {t: [t.replace("_", " "), t.replace("_", " ").lower()] for t in targets}
+        if "Global_active_power" in targets:
+            aliases["Global_active_power"] += ["household power", "active power", "power consumption",
+                                               "consumption", "potencia", "consumo"]
+        horizon_aliases = {}
+        for h in horizons:
+            names = [f"{h} steps", f"{h} minutes", f"{h} pasos", f"{h} minutos"]
+            if h == 60:
+                names += ["one hour", "an hour", "next hour", "una hora", "la proxima hora", "próxima hora"]
+            horizon_aliases[str(h)] = names
+        return [{"name": "target", "allowed": list(targets), "aliases": aliases},
+                {"name": "horizon", "allowed": [int(h) for h in horizons], "type": "integer",
+                 "aliases": horizon_aliases,
+                 "number_hints": ["step", "horizon", "minute", "hour", "ahead", "paso", "minuto", "hora", "adelante"]}]
+
+    def chat_request(self, prompt, data, config, parameters=None):
         if self._manifest is None:
             raise ValueError("no trained DEV bundle configured")
         if not isinstance(prompt, str) or len(prompt) > 512:
             raise ValueError("prompt must be a string of at most 512 characters")
-        match = re.fullmatch(r"forecast ([A-Za-z][A-Za-z0-9_]*) at ([1-9][0-9]{0,4}) steps", prompt)
-        if (not match or [match[1]] != self._manifest["targets"]
-                or [int(match[2])] != self._manifest["horizons"]):
-            raise ValueError("expected: forecast Global_active_power at 60 steps")
+        if parameters:
+            # Resolved against this bundle's own declared values, so neither a target nor a horizon can arrive from
+            # outside what was actually trained. The canonical phrasing below remains accepted as it always was.
+            if ([parameters.get("target")] != self._manifest["targets"]
+                    or [int(parameters.get("horizon", -1))] != self._manifest["horizons"]):
+                raise ValueError(f"this bundle forecasts {self._manifest['targets']} at {self._manifest['horizons']}")
+        else:
+            match = re.fullmatch(r"forecast ([A-Za-z][A-Za-z0-9_]*) at ([1-9][0-9]{0,4}) steps", prompt)
+            if (not match or [match[1]] != self._manifest["targets"]
+                    or [int(match[2])] != self._manifest["horizons"]):
+                raise ValueError("expected: forecast Global_active_power at 60 steps")
         required = {"provider", "family", "output_kind", "state", "as_of", "parameters"}
         # Shared workbench fields are not forecasting model parameters.
         transport = {"input", "presentation", "context", "asset", "language", "max_age_seconds", "options"}
