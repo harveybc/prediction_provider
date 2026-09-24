@@ -13,6 +13,10 @@ from prediction_provider_forecast.provider import digest
 def test_discovery_without_tensorflow_import():
     import subprocess
     import sys
+    # `supported` is checked by shape, not by a fixed list: whichever bundles the environment happens to configure, each
+    # entry must be a declared infer/point_forecast combination and the family must come from a bundle rather than from a
+    # product of the independent capability lists. What this test is really about is the import: discovery must not pull
+    # TensorFlow into the host process.
     code = """
 import sys
 from importlib.metadata import entry_points
@@ -20,7 +24,10 @@ ep = next(e for e in entry_points(group='m5phet.providers') if e.name == 'predic
 p = ep.load()()
 assert p.name == 'predictor_forecast'
 assert 'tensorflow' not in sys.modules
-assert p.capabilities()['supported'] == [{'operation': 'infer', 'family': 'regression_forecasting', 'output_kind': 'point_forecast'}]
+caps = p.capabilities()
+assert caps['supported'], caps
+assert all(e['operation'] == 'infer' and e['output_kind'] == 'point_forecast' for e in caps['supported']), caps
+assert sorted({e['family'] for e in caps['supported']}) == sorted(caps['families']), caps
 """
     subprocess.run([sys.executable, "-c", code], check=True)
 

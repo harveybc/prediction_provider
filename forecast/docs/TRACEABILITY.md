@@ -60,3 +60,63 @@ Native and fresh-process CLI output: 0.5412255525588989 kW, absolute difference
 `VERIFICATION.json`; the local bundle includes its own `parity.json`.
 No missing checkpoint or scaler remains. Full five-provider web acceptance is
 outside this component's acceptance and remains with the main agent.
+
+## Widening to Several Bundles (2026-09-24)
+
+Problem: the area served exactly one exported bundle, so it demonstrated that the
+plumbing worked and forecast nothing else. predictor declares around 31 model
+plugins and ships trained example checkpoints; none of them was reachable.
+
+Scope of this change: serve several bundles from one provider, export one further
+REAL predictor checkpoint, and make provenance a condition of being served.
+Still no training, GPU, held-out scoring, external model, trade or M5PHET edit,
+and no write of any kind into the predictor repository.
+
+New gates, designed before implementation:
+
+| Requirement | Test / Evidence |
+| --- | --- |
+| G1 a directory of bundles enumerates all of them | `test_a_directory_enumerates_every_bundle_it_holds`, `test_slots_declare_the_union_and_nothing_beyond_it` |
+| G2 a target one bundle has resolves to that bundle | `test_a_target_only_one_bundle_has_resolves_to_that_bundle` |
+| G3 a target two bundles share is refused with BOTH named | `test_a_target_two_bundles_share_is_refused_with_both_named`, `test_words_and_config_must_name_the_same_fitted_state` |
+| G4 a bundle without provenance is refused, not served | `test_a_bundle_that_cannot_say_where_it_came_from_is_refused` (7 cases), `test_one_unattributable_bundle_refuses_the_whole_directory` |
+| G5 the single-bundle path is unchanged | `test_a_single_bundle_path_behaves_exactly_as_before`, plus the whole pre-existing suite |
+| G6 the recorded household value still reproduces | `test_the_real_bundle_answers_its_recorded_value_from_inside_a_directory` |
+| G7 a second REAL predictor model is served | exported bundle + its `parity.json`; `export-predictor-example` reproduces it in one command |
+
+Design decisions worth stating, because each one had a tempting wrong answer:
+
+- **The v1 manifest is frozen.** Its bytes are load-bearing: the retained state
+  reference, `parity.json` and `example_request.json` all quote their digest.
+  It is validated exactly as it was and is never rewritten to fit the widened
+  contract. Everything new is schema v2, which carries its own `state_id`.
+- **Ambiguity is refused, never ordered away.** Two bundles may honestly answer
+  the same target at the same horizon. Picking the enumerated first would put a
+  model nobody chose behind a confident number.
+- **A bad bundle refuses the whole directory.** Skipping it would report a
+  shorter list as if it were complete.
+- **`exposure` is not copied.** `DEV_ONLY_NO_TEST_ACCESS` is a receipt a governed
+  run wrote; predictor's committed examples have none and say so
+  (`PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT`).
+- **`quality` can only be `UNMEASURED`.** Nothing in this package scores a model,
+  so nothing in it may publish a quality number.
+- **Derived input channels come from predictor's own preprocessor**, called and
+  hashed, never reimplemented; a fork would keep working after predictor changed
+  and feed the graph channels it was never trained on.
+
+Verification outcome: 89 passed, 2 skipped (from 69 passed, 2 skipped) on the
+native CPU interpreter with the retained household bundle configured. The two
+skips are unchanged: they are the actual-M5PHET-runtime integrations, which are
+not importable from the native interpreter.
+
+One pre-existing test was adjusted, and the reason is external to this change:
+the installed `m5phet.interpret` gained an `unsupported_named` pass that refuses a
+`known_unsupported` value with `UNSUPPORTED_VALUE` where it previously returned
+`MISSING_PARAMETER`. The committed provider fails that assertion too, so the
+assertion now accepts either refusal while still pinning what belongs to this
+package: the untrained target never becomes a parameter and the refusal names the
+target the bundle does have.
+
+DEV results still do not establish calibration, benchmark success, governance
+acceptance or production eligibility, for either bundle. The direction bundle in
+particular carries no exposure receipt and no measured quality of any kind.

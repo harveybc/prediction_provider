@@ -1,4 +1,4 @@
-"""CPU-only adapter around an exported, retained native DEV forecasting graph."""
+"""CPU-only adapter around exported, retained native DEV forecasting graphs."""
 
 from __future__ import annotations
 
@@ -16,7 +16,41 @@ import threading
 import numpy as np
 
 
+#: the combination the retained household bundle was exported and tested under. A v2 bundle names its own family, so this
+#: is the DEFAULT for a bundle that does not declare one -- never a claim about every bundle a directory may hold.
 COMBINATION = {"operation": "infer", "family": "regression_forecasting", "output_kind": "point_forecast"}
+
+SCHEMA_V1 = "prediction_provider.forecast_bundle.v1"
+SCHEMA_V2 = "prediction_provider.forecast_bundle.v2"
+
+#: v1 predates per-bundle identity, and its manifest BYTES are load-bearing: the retained state reference, `parity.json`
+#: and `example_request.json` all quote the digest of exactly those bytes, and the recorded native value replays only
+#: against that reference. So a v1 manifest is never given a `state_id` field and never revalidated against a widened
+#: contract; it keeps the exact identity and the exact checks it was published with. Everything new is v2.
+LEGACY_V1_STATE_ID = "e1-household-r0-s1"
+LEGACY_V1_TASK_ID = "e1.household.W60_h60"
+LEGACY_V1_COLUMNS = ["Global_reactive_power", "Voltage", "Global_intensity", "Sub_metering_1",
+                     "Sub_metering_2", "Sub_metering_3", "Global_active_power"]
+LEGACY_V1_TITLE = "DEVELOPMENT: retained household-power model, 60-minute forecast"
+
+#: how a bundle turns the graph's raw output into the number it publishes. `target_scaler_inverse` undoes the train-only
+#: standardisation of the target channel (the household regression bundle); `identity` publishes the graph's own output
+#: unchanged, which is the only correct readout for a bounded quantity such as a probability -- rescaling one would
+#: silently publish a number outside its own unit.
+READOUTS = ("target_scaler_inverse", "identity")
+
+#: the only quality this package can honestly publish. Export never scores a model against held-out data, so a bundle
+#: arriving with any other value is refused rather than allowed to carry a number this package did not compute.
+UNMEASURED = "UNMEASURED"
+
+#: what a bundle is allowed to say about held-out exposure. `DEV_ONLY_NO_TEST_ACCESS` is a RECEIPT: a governed run wrote
+#: it and the exporter checked it. predictor's committed example checkpoints have no such receipt, so they say so instead
+#: of borrowing the stronger wording -- a bundle that claims a receipt nobody wrote is worse than one that claims none.
+EXPOSURES = ("DEV_ONLY_NO_TEST_ACCESS", "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT")
+
+#: what a v2 bundle must say about where its weights came from. A bundle that cannot say what it was trained on, by whom
+#: and when is refused at construction: serving it would put an unattributable model behind a confident answer.
+REQUIRED_PROVENANCE = ("trained_on", "trained_by", "trained_at", "quality")
 
 
 def digest(value):
@@ -59,56 +93,213 @@ def _aware_time(value):
     return parsed
 
 
-class ForecastProvider:
-    name = "predictor_forecast"
+def _text(value):
+    return isinstance(value, str) and bool(value.strip())
 
-    def __init__(self, bundle=None):
-        configured = bundle or os.environ.get("M5PHET_FORECAST_BUNDLE")
-        self._bundle = Path(configured).resolve() if configured else None
-        self._engine = None
-        self._worker_python = os.environ.get("M5PHET_FORECAST_PYTHON")
-        if self._worker_python and (not Path(self._worker_python).is_absolute()
-                                    or not Path(self._worker_python).is_file()):
-            raise ValueError("M5PHET_FORECAST_PYTHON must be an operator-configured absolute Python executable")
-        self._lock = threading.RLock()
-        self._manifest = None
-        if self._bundle is not None:
-            path = self._bundle / "manifest.json"
-            self._manifest = json.loads(path.read_text())
-            self._manifest_hash = file_digest(path)
-            self._validate_manifest()
-            self._digest = digest(self._manifest)
-            self._state_ref = "e1-household-r0-s1:" + self._digest
 
-    def _validate_manifest(self):
-        m = self._manifest
-        if (m.get("schema") != "prediction_provider.forecast_bundle.v1"
-                or m.get("engine") != "tensorflow_saved_model"
-                or m.get("exposure") != "DEV_ONLY_NO_TEST_ACCESS"
-                or m.get("targets") != ["Global_active_power"]
-                or m.get("horizons") != [60]
-                or m.get("window") != 60
-                or m.get("step_seconds") != 60
-                or m.get("unit") != "kW" or m.get("scale") != "original"):
+def _dedup(names):
+    """Order-preserving deduplication. Two bundles may legitimately declare the same alias for the same value; the slot
+    must still list it once, or the workbench would be offered the same word twice as if it meant two things."""
+    out = []
+    for name in names:
+        if name not in out:
+            out.append(name)
+    return out
+
+
+class _Bundle:
+    """One exported native graph plus the manifest that says what it is. Nothing here loads TensorFlow."""
+
+    def __init__(self, path):
+        self.path = Path(path).resolve()
+        manifest_path = self.path / "manifest.json"
+        self.manifest = json.loads(manifest_path.read_text())
+        self.manifest_hash = file_digest(manifest_path)
+        self.engine = None
+        self.lock = threading.RLock()
+        self._validate()
+        self.digest = digest(self.manifest)
+        state_id = LEGACY_V1_STATE_ID if self.schema == SCHEMA_V1 else self.manifest["state_id"]
+        self.state_ref = f"{state_id}:{self.digest}"
+
+    # ------------------------------------------------------------------ identity and declaration
+
+    @property
+    def schema(self):
+        return self.manifest.get("schema")
+
+    @property
+    def targets(self):
+        return list(self.manifest["targets"])
+
+    @property
+    def horizons(self):
+        return [int(h) for h in self.manifest["horizons"]]
+
+    @property
+    def combination(self):
+        if self.schema == SCHEMA_V1:
+            return dict(COMBINATION)
+        return dict(COMBINATION, family=self.manifest["family"])
+
+    @property
+    def readout(self):
+        return "target_scaler_inverse" if self.schema == SCHEMA_V1 else self.manifest["readout"]
+
+    @property
+    def input_scale(self):
+        return "train_standardized" if self.schema == SCHEMA_V1 else self.manifest["input_scale"]
+
+    @property
+    def title(self):
+        return LEGACY_V1_TITLE if self.schema == SCHEMA_V1 else self.manifest["title"]
+
+    def output_schema(self):
+        return {k: copy.deepcopy(self.manifest[k]) for k in ("targets", "horizons", "unit", "scale")}
+
+    def state(self):
+        return {"state_ref": self.state_ref, "digest": self.digest,
+                "model_sha256": digest(self.manifest["files"]),
+                "task_id": self.manifest["task_id"], "exposure": self.manifest["exposure"]}
+
+    def target_aliases(self):
+        """Every ordinary word that may reach THIS bundle's target, and no word that may not.
+
+        The base spelling is derived from the column name; the rest is declared by the bundle itself (hard-coded for v1,
+        whose manifest cannot gain an `aliases` field without changing its published digest). An alias for a value the
+        bundle does not have would be a door into an untrained question."""
+        aliases = {t: _dedup([t.replace("_", " "), t.replace("_", " ").lower()]) for t in self.targets}
+        if self.schema == SCHEMA_V1:
+            if "Global_active_power" in aliases:
+                aliases["Global_active_power"] += ["household power", "active power", "power consumption",
+                                                   "consumption", "potencia", "consumo"]
+            return aliases
+        for target, names in (self.manifest.get("aliases") or {}).items():
+            aliases[target] = _dedup(aliases.get(target, []) + list(names))
+        return aliases
+
+    def horizon_aliases(self):
+        """Step counts spoken in ordinary units. `minutes` is only correct because the step IS a minute, so it is emitted
+        only for a one-minute grid; a four-hour bundle that inherited it would accept `60 minutes` for 60 four-hour bars."""
+        step = self.manifest["step_seconds"]
+        out = {}
+        for h in self.horizons:
+            names = [f"{h} steps"] + ([f"{h} minutes"] if step == 60 else []) + \
+                    [f"{h} pasos"] + ([f"{h} minutos"] if step == 60 else [])
+            if self.schema == SCHEMA_V1 and h == 60:
+                names += ["one hour", "an hour", "next hour", "una hora", "la proxima hora", "próxima hora"]
+            if self.schema != SCHEMA_V1:
+                names += list((self.manifest.get("horizon_aliases") or {}).get(str(h), ()))
+            out[str(h)] = _dedup(names)
+        return out
+
+    # ------------------------------------------------------------------ validation
+
+    def _validate(self):
+        m = self.manifest
+        if m.get("schema") not in (SCHEMA_V1, SCHEMA_V2):
+            raise ValueError(f"{self.path.name}: unsupported bundle schema {m.get('schema')!r}")
+        if m.get("engine") != "tensorflow_saved_model" or m.get("exposure") not in EXPOSURES:
+            raise ValueError(f"{self.path.name}: unsupported native DEV bundle contract")
+        self._validate_provenance()
+        self._validate_files()
+        if m.get("schema") == SCHEMA_V1:
+            self._validate_v1()
+        else:
+            self._validate_v2()
+        self._validate_shape_and_scaler()
+
+    def _validate_provenance(self):
+        prov = self.manifest.get("provenance")
+        if not isinstance(prov, dict) or not prov:
+            raise ValueError(f"{self.path.name}: a bundle without provenance is refused, never served")
+        if self.schema == SCHEMA_V1:
+            # The v1 manifest predates the named provenance fields and cannot gain them without changing its digest, so
+            # the rule it can carry is the one above: provenance exists and is not empty.
+            return
+        missing = [k for k in REQUIRED_PROVENANCE if not _text(prov.get(k))]
+        if missing:
+            raise ValueError(f"{self.path.name}: provenance is missing {', '.join(missing)}; "
+                             f"a model nobody can attribute is not served")
+        if prov["quality"] != UNMEASURED:
+            raise ValueError(f"{self.path.name}: provenance quality must be {UNMEASURED!r}; this package never scores a "
+                             f"model, so it cannot publish a quality claim it did not compute")
+
+    def _validate_v1(self):
+        m = self.manifest
+        if (m.get("exposure") != "DEV_ONLY_NO_TEST_ACCESS"
+                or m.get("targets") != ["Global_active_power"] or m.get("horizons") != [60] or m.get("window") != 60
+                or m.get("step_seconds") != 60 or m.get("unit") != "kW" or m.get("scale") != "original"):
             raise ValueError("unsupported native DEV bundle contract")
-        cols = m.get("columns")
-        expected = ["Global_reactive_power", "Voltage", "Global_intensity", "Sub_metering_1",
-                    "Sub_metering_2", "Sub_metering_3", "Global_active_power"]
-        if cols != expected:
+        if m.get("columns") != LEGACY_V1_COLUMNS:
             raise ValueError("bundle input columns do not match native graph")
-        if m.get("task_id") != "e1.household.W60_h60":
+        if m.get("task_id") != LEGACY_V1_TASK_ID:
             raise ValueError("bundle task identity is unsupported")
-        scaler = m.get("scaler", {})
-        for key in ("mean", "sd"):
-            values = scaler.get(key)
-            if (not isinstance(values, list) or len(values) != len(cols)
-                    or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)):
-                raise ValueError("invalid train-only scaler")
-        if any(s <= 0 for s in scaler["sd"]) or scaler.get("fitted_on") != "train windows only":
-            raise ValueError("invalid train-only scaler")
+
+    def _validate_v2(self):
+        m = self.manifest
+        # `horizon_meaning` is required because a step is not self-explanatory outside a fixed-grid regression: a
+        # classifier's head index says nothing about how far ahead its label looks, and a bundle that stayed silent
+        # would let a reader assume `step_seconds` answered that question.
+        for key in ("state_id", "task_id", "unit", "scale", "family", "title", "input_scale", "horizon_meaning"):
+            if not _text(m.get(key)):
+                raise ValueError(f"{self.path.name}: a v2 bundle must declare a nonempty {key}")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,80}", m["state_id"]):
+            raise ValueError(f"{self.path.name}: state_id must be a short lowercase identifier")
+        if m.get("readout") not in READOUTS:
+            raise ValueError(f"{self.path.name}: readout must be one of {READOUTS}")
+        for key in ("aliases", "horizon_aliases"):
+            declared = m.get(key) or {}
+            if not isinstance(declared, dict):
+                raise ValueError(f"{self.path.name}: {key} must be a mapping")
+            known = set(m["targets"]) if key == "aliases" else {str(int(h)) for h in m["horizons"]}
+            if set(declared) - known:
+                raise ValueError(f"{self.path.name}: {key} names a value this bundle does not have")
+            if any(not _text(v) for names in declared.values() for v in names):
+                raise ValueError(f"{self.path.name}: {key} entries must be nonempty strings")
+
+    def _validate_shape_and_scaler(self):
+        m = self.manifest
+        cols, targets, horizons = m.get("columns"), m.get("targets"), m.get("horizons")
+        if (not isinstance(cols, list) or not cols or len(set(cols)) != len(cols)
+                or any(not _text(c) for c in cols)):
+            raise ValueError(f"{self.path.name}: columns must be distinct nonempty names")
+        if not isinstance(targets, list) or len(targets) != 1 or not _text(targets[0]):
+            # A multi-target payload layout has never been exported or tested here; refusing beats guessing which row of
+            # `values` belongs to which output id.
+            raise ValueError(f"{self.path.name}: exactly one target is supported")
+        if (not isinstance(horizons, list) or not horizons
+                or any(type(h) is not int or h <= 0 for h in horizons) or len(set(horizons)) != len(horizons)):
+            raise ValueError(f"{self.path.name}: horizons must be distinct positive integer steps")
+        if type(m.get("window")) is not int or m["window"] <= 0:
+            raise ValueError(f"{self.path.name}: window must be a positive number of history rows")
+        if type(m.get("step_seconds")) is not int or m["step_seconds"] <= 0:
+            raise ValueError(f"{self.path.name}: step_seconds must be a positive number of seconds")
+        if not _text(m.get("unit")) or not _text(m.get("scale")) or not _text(self.input_scale):
+            raise ValueError(f"{self.path.name}: unit, scale and input_scale are required")
+        scaler = m.get("scaler")
+        if not isinstance(scaler, dict) or not scaler or not _text(scaler.get("fitted_on")):
+            raise ValueError(f"{self.path.name}: a bundle must say what its input scaler was fitted on")
         if m.get("scaler_digest") != digest(scaler):
-            raise ValueError("scaler hash mismatch")
-        files = m.get("files")
+            raise ValueError(f"{self.path.name}: scaler hash mismatch")
+        if self.schema == SCHEMA_V1 and scaler.get("fitted_on") != "train windows only":
+            raise ValueError("invalid train-only scaler")
+        if self.readout == "target_scaler_inverse":
+            # This readout multiplies by the target channel's own standard deviation, so the arrays must exist, be
+            # finite, be per-column and have a positive spread. Without that check a zero sd would publish the mean.
+            for key in ("mean", "sd"):
+                values = scaler.get(key)
+                if (not isinstance(values, list) or len(values) != len(cols)
+                        or any(type(v) not in (int, float) or not math.isfinite(v) for v in values)):
+                    raise ValueError("invalid train-only scaler")
+            if any(s <= 0 for s in scaler["sd"]):
+                raise ValueError("invalid train-only scaler")
+            if targets[0] not in cols:
+                raise ValueError(f"{self.path.name}: the target channel is not among the input columns, so its "
+                                 f"standardisation cannot be undone")
+
+    def _validate_files(self):
+        files = self.manifest.get("files")
         if not isinstance(files, dict) or not files or "saved_model/saved_model.pb" not in files:
             raise ValueError("missing native graph file hashes")
         for name, sha in files.items():
@@ -117,68 +308,125 @@ class ForecastProvider:
                     or not re.fullmatch(r"[0-9a-f]{64}", str(sha))):
                 raise ValueError("invalid artifact path or hash")
 
-    def known_states(self):
-        return [self._state_ref] if self._manifest is not None else []
-
-    def capabilities(self):
-        return {"operations": ["infer"], "families": ["regression_forecasting"],
-                "output_kinds": ["point_forecast"], "uncertainty_methods": ["none"],
-                "supported": [dict(COMBINATION)], "known_states": self.known_states(),
-                "backend": "tensorflow_saved_model_cpu_subprocess" if self._worker_python else "tensorflow_saved_model_cpu",
-                "input_schema": {"kind": "one_history_window", "scale": "train_standardized"},
-                "output_schema": self._output_schema() if self._manifest else None}
-
-    def _output_schema(self):
-        return {k: copy.deepcopy(self._manifest[k]) for k in ("targets", "horizons", "unit", "scale")}
-
-    def _verify(self):
-        if file_digest(self._bundle / "manifest.json") != self._manifest_hash:
+    def verify(self):
+        if file_digest(self.path / "manifest.json") != self.manifest_hash:
             raise ValueError("manifest hash changed; instantiate a new provider for a new state")
-        actual = {p.relative_to(self._bundle).as_posix()
-                  for p in (self._bundle / "saved_model").rglob("*") if p.is_file()}
-        if actual != set(self._manifest["files"]):
+        actual = {p.relative_to(self.path).as_posix()
+                  for p in (self.path / "saved_model").rglob("*") if p.is_file()}
+        if actual != set(self.manifest["files"]):
             raise ValueError("native artifact file set/hash mismatch")
-        for name, sha in self._manifest["files"].items():
-            path = self._bundle / name
-            if not path.resolve().is_relative_to(self._bundle) or path.is_symlink():
+        for name, sha in self.manifest["files"].items():
+            path = self.path / name
+            if not path.resolve().is_relative_to(self.path) or path.is_symlink():
                 raise ValueError("artifact path escapes the bundle")
             if file_digest(path) != sha:
                 raise ValueError(f"native artifact hash mismatch: {name}")
 
-    def _state(self):
-        return {"state_ref": self._state_ref, "digest": self._digest,
-                "model_sha256": digest(self._manifest["files"]),
-                "task_id": self._manifest["task_id"], "exposure": self._manifest["exposure"]}
+
+class ForecastProvider:
+    name = "predictor_forecast"
+
+    def __init__(self, bundle=None):
+        configured = bundle or os.environ.get("M5PHET_FORECAST_BUNDLE")
+        self._root = Path(configured).resolve() if configured else None
+        self._worker_python = os.environ.get("M5PHET_FORECAST_PYTHON")
+        if self._worker_python and (not Path(self._worker_python).is_absolute()
+                                    or not Path(self._worker_python).is_file()):
+            raise ValueError("M5PHET_FORECAST_PYTHON must be an operator-configured absolute Python executable")
+        self._bundles = []
+        if self._root is not None:
+            for path in self._discover(self._root):
+                loaded = _Bundle(path)
+                if any(b.state_ref == loaded.state_ref for b in self._bundles):
+                    raise ValueError(f"two configured bundles publish the same fitted state {loaded.state_ref}; "
+                                     f"a request could not name which one it meant")
+                self._bundles.append(loaded)
+
+    @staticmethod
+    def _discover(root):
+        """One bundle, or a directory of them. A directory is the operator's deliberate list, so a member that refuses to
+        validate refuses the whole provider: quietly serving the rest would hide the one that was meant to be there."""
+        if (root / "manifest.json").is_file():
+            return [root]
+        children = sorted(p for p in root.iterdir() if p.is_dir() and (p / "manifest.json").is_file())
+        if not children:
+            raise ValueError(f"{root} is neither an exported bundle nor a directory containing exported bundles")
+        return children
+
+    @property
+    def _engine(self):
+        """`is None` still means 'no native graph has been built in this process'. Callers and tests assert exactly that
+        before a load, so it must stay true when several bundles are configured and none of them has been loaded."""
+        for bundle in self._bundles:
+            if bundle.engine is not None:
+                return bundle.engine
+        return None
+
+    def _bundle(self, state_ref):
+        for bundle in self._bundles:
+            if bundle.state_ref == state_ref:
+                return bundle
+        raise ValueError("unknown fitted state; configure an exported trained DEV bundle")
+
+    def known_states(self):
+        return [b.state_ref for b in self._bundles]
+
+    def capabilities(self):
+        supported, families = [], []
+        for bundle in self._bundles:
+            entry = bundle.combination
+            if entry not in supported:
+                supported.append(entry)
+            if entry["family"] not in families:
+                families.append(entry["family"])
+        # Each bundle says which standardisation its history rows must already be in. One value stays a plain string, as
+        # it always was; several are listed, because a caller told a single scale would standardise for the wrong bundle.
+        scales = _dedup([b.input_scale for b in self._bundles]) or ["train_standardized"]
+        return {"operations": ["infer"], "families": families or [COMBINATION["family"]],
+                "output_kinds": ["point_forecast"], "uncertainty_methods": ["none"],
+                "supported": supported or [dict(COMBINATION)], "known_states": self.known_states(),
+                "backend": "tensorflow_saved_model_cpu_subprocess" if self._worker_python else "tensorflow_saved_model_cpu",
+                "input_schema": {"kind": "one_history_window",
+                                 "scale": scales[0] if len(scales) == 1 else scales},
+                # With several bundles there is no single output schema; each fitted state declares its own, and a caller
+                # that reads only the singular field must see nothing rather than one bundle's contract standing in for all.
+                "output_schema": self._bundles[0].output_schema() if len(self._bundles) == 1 else None,
+                "bundles": [dict(bundle.output_schema(), state_ref=bundle.state_ref,
+                                 task_id=bundle.manifest["task_id"], family=bundle.combination["family"],
+                                 window=bundle.manifest["window"], step_seconds=bundle.manifest["step_seconds"])
+                            for bundle in self._bundles]}
 
     def load(self, state_ref):
-        if state_ref not in self.known_states():
-            raise ValueError("unknown fitted state; configure an exported trained DEV bundle")
-        with self._lock:
-            self._verify()
-            if self._engine is None:
+        bundle = self._bundle(state_ref)
+        with bundle.lock:
+            bundle.verify()
+            if bundle.engine is None:
                 if self._worker_python:
-                    loaded = self._native_process("load", state_ref=state_ref)
-                    if loaded != self._state():
+                    loaded = self._native_process(bundle, "load", state_ref=state_ref)
+                    if loaded != bundle.state():
                         raise ValueError("native process loaded a different state")
-                    self._engine = "operator_native_process"
+                    bundle.engine = "operator_native_process"
                     return loaded
                 tf = cpu_tensorflow()
                 with tf.device("/CPU:0"):
-                    loaded = tf.saved_model.load(str(self._bundle / "saved_model"))
+                    loaded = tf.saved_model.load(str(bundle.path / "saved_model"))
                 engine = loaded.signatures["serving_default"]
                 args, kwargs = engine.structured_input_signature
                 outputs = engine.structured_outputs
-                if (args or set(kwargs) != {"x"} or kwargs["x"].shape != (1, 60, 7)
+                shape = (1, bundle.manifest["window"], len(bundle.manifest["columns"]))
+                width = len(bundle.targets) * len(bundle.horizons)
+                if (args or set(kwargs) != {"x"} or kwargs["x"].shape != shape
                         or kwargs["x"].dtype != tf.float32 or set(outputs) != {"forecast"}
-                        or outputs["forecast"].shape != (1, 1) or outputs["forecast"].dtype != tf.float32):
+                        or outputs["forecast"].shape != (1, width) or outputs["forecast"].dtype != tf.float32):
                     raise ValueError("native graph signature does not match the declared forecast contract")
-                self._engine = engine
-            return self._state()
+                bundle.engine = engine
+            return bundle.state()
 
-    def _native_process(self, command, *, state_ref=None, request=None):
-        # Only the operator supplies this executable and bundle path, never chat config.
+    def _native_process(self, bundle, command, *, state_ref=None, request=None):
+        # Only the operator supplies this executable and bundle path, never chat config. The worker is always handed ONE
+        # resolved bundle, so the isolated process never has to repeat the resolution the host already made.
         argv = [self._worker_python, "-m", "prediction_provider_forecast.cli", command,
-                "--bundle", str(self._bundle)]
+                "--bundle", str(bundle.path)]
         if command == "load":
             argv += ["--state", state_ref]
         else:
@@ -197,137 +445,196 @@ class ForecastProvider:
         return json.loads(done.stdout)
 
     def _check_request(self, request):
-        if self._manifest is None:
+        return self._checked(request)[1]
+
+    def _checked(self, request):
+        if not self._bundles:
             raise ValueError("no trained DEV bundle configured")
         if not isinstance(request, dict) or request.get("schema_version") != "m5phet.task.draft2":
             raise ValueError("expected m5phet.task.draft2 request")
-        expected = dict(COMBINATION, provider_ref=self.name, task_id=self._manifest["task_id"],
-                        fitted_state_ref=self._state_ref)
+        bundle = self._bundle(request.get("fitted_state_ref"))
+        expected = dict(bundle.combination, provider_ref=self.name, task_id=bundle.manifest["task_id"],
+                        fitted_state_ref=bundle.state_ref)
         if any(request.get(k) != v for k, v in expected.items()):
             raise ValueError("unsupported request task, provider, operation or fitted state")
         if not isinstance(request.get("request_id"), str) or not request["request_id"].strip():
             raise ValueError("request_id must be nonempty")
         _aware_time(request.get("as_of"))
         schema = request.get("output_schema")
-        if (schema != self._output_schema() or not isinstance(schema.get("horizons"), list)
+        if (schema != bundle.output_schema() or not isinstance(schema.get("horizons"), list)
                 or any(type(h) is not int for h in schema["horizons"])):
             raise ValueError("output schema must match trained targets, horizons, unit and scale")
         data = request.get("data")
         if not isinstance(data, dict) or set(data) != {"columns", "values", "scale", "scaler_digest"}:
             raise ValueError("data must contain exactly columns, values, scale and scaler_digest")
-        if (data["columns"] != self._manifest["columns"] or data["scale"] != "train_standardized"
-                or data["scaler_digest"] != self._manifest["scaler_digest"]):
+        if (data["columns"] != bundle.manifest["columns"] or data["scale"] != bundle.input_scale
+                or data["scaler_digest"] != bundle.manifest["scaler_digest"]):
             raise ValueError("input columns, scale or scaler_digest mismatch")
         values = data["values"]
-        if not isinstance(values, list) or len(values) != self._manifest["window"]:
-            raise ValueError("expected exactly 60 chronological history rows, ending at the origin")
+        window = bundle.manifest["window"]
+        if not isinstance(values, list) or len(values) != window:
+            raise ValueError(f"expected exactly {window} chronological history rows, ending at the origin")
         for row in values:
-            if not isinstance(row, list) or len(row) != len(self._manifest["columns"]):
+            if not isinstance(row, list) or len(row) != len(bundle.manifest["columns"]):
                 raise ValueError("input feature count mismatch")
             if any(type(v) not in (int, float) or abs(v) > float(np.finfo(np.float32).max) or not math.isfinite(v) for v in row):
                 raise ValueError("history values must be finite float32-representable numbers, not bools")
         if request.get("population") != {"input_sha256": digest(data)}:
             raise ValueError("population must bind this exact input window")
-        return np.asarray(values, dtype=np.float32)[None, :, :]
+        return bundle, np.asarray(values, dtype=np.float32)[None, :, :]
 
     def infer(self, request, state):
-        x = self._check_request(request)
-        if state != self._state():
+        bundle, x = self._checked(request)
+        if state != bundle.state():
             raise ValueError("loaded state identity mismatch")
-        with self._lock:
-            self._verify()
-            if self._engine is None:
+        with bundle.lock:
+            bundle.verify()
+            if bundle.engine is None:
                 raise ValueError("load the fitted state before infer")
             if self._worker_python:
-                return self._native_process("infer", request=request)
+                return self._native_process(bundle, "infer", request=request)
             tf = cpu_tensorflow()
             with tf.device("/CPU:0"):
-                result = self._engine(x=tf.convert_to_tensor(x))["forecast"].numpy()
-        if result.shape != (1, 1) or not np.isfinite(result).all():
+                result = bundle.engine(x=tf.convert_to_tensor(x))["forecast"].numpy()
+        width = len(bundle.targets) * len(bundle.horizons)
+        if result.shape != (1, width) or not np.isfinite(result).all():
             raise ValueError("native engine returned invalid forecast shape or non-finite values")
         # Preserve native float32 arithmetic, including its original-scale readout.
-        j = self._manifest["columns"].index(self._manifest["targets"][0])
-        scaler = self._manifest["scaler"]
-        values = result * float(scaler["sd"][j]) + float(scaler["mean"][j])
+        if bundle.readout == "target_scaler_inverse":
+            j = bundle.manifest["columns"].index(bundle.targets[0])
+            scaler = bundle.manifest["scaler"]
+            values = result * float(scaler["sd"][j]) + float(scaler["mean"][j])
+        else:
+            values = result
         if not np.isfinite(values).all():
             raise ValueError("native output scaling produced a non-finite forecast")
-        target = self._manifest["targets"][0]
-        payload = dict(self._output_schema(), values=values.tolist())
+        target = bundle.targets[0]
+        payload = dict(bundle.output_schema(), values=values.reshape(1, len(bundle.horizons)).tolist())
         return {"outputs": {target: {"status": "OK", "uncertainty": "none", "payload": payload}},
                 "population": copy.deepcopy(request["population"])}
 
     def chat_slots(self):
-        """What this engine needs, and the only values it has. The workbench resolves ordinary phrasing against exactly
-        this, so a paraphrase can reach the model and an unsupported target or horizon cannot."""
-        if self._manifest is None:
+        """What these engines need, and the only values they have. The workbench resolves ordinary phrasing against exactly
+        this, so a paraphrase can reach a model and an unsupported target or horizon cannot.
+
+        With several bundles configured the declaration is their UNION: every target and horizon that some bundle can
+        answer. Which bundle answers is settled afterwards, in `chat_request`, where a value two bundles share is refused
+        rather than assigned to whichever was enumerated first."""
+        if not self._bundles:
             return []
-        targets, horizons = self._manifest["targets"], self._manifest["horizons"]
-        aliases = {t: [t.replace("_", " "), t.replace("_", " ").lower()] for t in targets}
-        if "Global_active_power" in targets:
-            aliases["Global_active_power"] += ["household power", "active power", "power consumption",
-                                               "consumption", "potencia", "consumo"]
-        horizon_aliases = {}
-        for h in horizons:
-            names = [f"{h} steps", f"{h} minutes", f"{h} pasos", f"{h} minutos"]
-            if h == 60:
-                names += ["one hour", "an hour", "next hour", "una hora", "la proxima hora", "próxima hora"]
-            horizon_aliases[str(h)] = names
-        # What this bundle has and does NOT have. Naming a column it holds as input but does not forecast is refused before
-        # any interpreter is consulted; otherwise a model asked to choose among the allowed values chooses the only one and
-        # answers confidently about a different series.
-        untrained = [c for c in (self._manifest.get("columns") or []) if c not in targets]
-        return [{"name": "target", "allowed": list(targets), "aliases": aliases,
+        targets, aliases, horizons, horizon_aliases = [], {}, [], {}
+        for bundle in self._bundles:
+            declared = bundle.target_aliases()
+            for target in bundle.targets:
+                if target not in targets:
+                    targets.append(target)
+                aliases[target] = _dedup(aliases.get(target, []) + declared.get(target, []))
+            spoken = bundle.horizon_aliases()
+            for horizon in bundle.horizons:
+                if horizon not in horizons:
+                    horizons.append(horizon)
+                horizon_aliases[str(horizon)] = _dedup(horizon_aliases.get(str(horizon), []) + spoken[str(horizon)])
+        # What these bundles have and do NOT have. Naming a column one of them holds as input but no bundle forecasts is
+        # refused before any interpreter is consulted; otherwise a model asked to choose among the allowed values chooses
+        # one that exists and answers confidently about a different series.
+        untrained = []
+        for bundle in self._bundles:
+            for column in bundle.manifest.get("columns") or []:
+                if column not in targets and column not in untrained:
+                    untrained.append(column)
+        return [{"name": "target", "allowed": targets, "aliases": aliases,
                  "known_unsupported": untrained},
-                {"name": "horizon", "allowed": [int(h) for h in horizons], "type": "integer",
+                {"name": "horizon", "allowed": horizons, "type": "integer",
                  "aliases": horizon_aliases,
                  "number_hints": ["step", "horizon", "minute", "hour", "ahead", "paso", "minuto", "hora", "adelante"]}]
 
+    def _available(self):
+        return "; ".join(f"{b.targets[0]} at {b.horizons} ({b.state_ref})" for b in self._bundles)
+
+    def _resolve(self, target, horizon):
+        """Exactly one bundle, or a refusal that names the alternatives.
+
+        Two configured bundles may honestly serve the same target at the same horizon -- two architectures, two regimes,
+        two training windows. Answering with whichever one was enumerated first would put a model nobody chose behind a
+        confident number, and the caller would have no way to tell which. So the refusal names both and asks for the
+        fitted state instead."""
+        matches = [b for b in self._bundles if target in b.targets and horizon in b.horizons]
+        if len(matches) > 1:
+            named = " and ".join(b.state_ref for b in matches)
+            raise ValueError(f"{target!r} at horizon {horizon!r} is served by more than one configured bundle "
+                             f"({named}); name the fitted state instead of letting this pick one")
+        if not matches:
+            raise ValueError(f"no configured bundle forecasts {target!r} at horizon {horizon!r}; available: "
+                             f"{self._available()}")
+        return matches[0]
+
     def chat_request(self, prompt, data, config, parameters=None):
-        if self._manifest is None:
+        if not self._bundles:
             raise ValueError("no trained DEV bundle configured")
         if not isinstance(prompt, str) or len(prompt) > 512:
             raise ValueError("prompt must be a string of at most 512 characters")
         if parameters:
-            # Resolved against this bundle's own declared values, so neither a target nor a horizon can arrive from
-            # outside what was actually trained. The canonical phrasing below remains accepted as it always was.
-            if ([parameters.get("target")] != self._manifest["targets"]
-                    or [int(parameters.get("horizon", -1))] != self._manifest["horizons"]):
-                raise ValueError(f"this bundle forecasts {self._manifest['targets']} at {self._manifest['horizons']}")
+            # Resolved against the configured bundles' own declared values, so neither a target nor a horizon can arrive
+            # from outside what was actually trained. The canonical phrasing below remains accepted as it always was.
+            target = parameters.get("target")
+            try:
+                horizon = int(parameters.get("horizon"))
+            except (TypeError, ValueError):
+                horizon = None
         else:
             match = re.fullmatch(r"forecast ([A-Za-z][A-Za-z0-9_]*) at ([1-9][0-9]{0,4}) steps", prompt)
-            if (not match or [match[1]] != self._manifest["targets"]
-                    or [int(match[2])] != self._manifest["horizons"]):
-                raise ValueError("expected: forecast Global_active_power at 60 steps")
+            if not match:
+                raise ValueError("expected one of: "
+                                 + "; ".join(f"forecast {b.targets[0]} at {h} steps"
+                                             for b in self._bundles for h in b.horizons))
+            target, horizon = match[1], int(match[2])
+        bundle = self._resolve(target, horizon)
         required = {"provider", "family", "output_kind", "state", "as_of", "parameters"}
         # Shared workbench fields are not forecasting model parameters.
         transport = {"input", "presentation", "context", "asset", "language", "max_age_seconds", "options"}
         if (not isinstance(config, dict) or not required <= set(config)
                 or set(config) - required - transport):
             raise ValueError("config requires provider, family, output_kind, state, as_of, parameters; input is optional")
-        if (config["provider"] != self.name or config["family"] != COMBINATION["family"]
-                or config["output_kind"] != COMBINATION["output_kind"] or config.get("input", "json") != "json"):
+        if (config["provider"] != self.name or config["family"] != bundle.combination["family"]
+                or config["output_kind"] != bundle.combination["output_kind"] or config.get("input", "json") != "json"):
             raise ValueError("chat config must select this point-forecast provider with JSON input")
+        if config["state"] != bundle.state_ref:
+            # The words chose one fitted state and the config named another. Neither silently wins: a request answered by
+            # a model the caller did not name is exactly what the ambiguity rule above exists to prevent.
+            raise ValueError(f"the request names fitted state {config['state']!r}, but {target!r} at horizon "
+                             f"{horizon!r} belongs to {bundle.state_ref!r}")
         parameters = config["parameters"]
         if not isinstance(parameters, dict) or set(parameters) - {"request_id"}:
             raise ValueError("parameters only supports optional request_id; no implicit model settings")
         request_id = parameters.get("request_id", "forecast:" + digest({"prompt": prompt, "data": data, "config": config}))
         request = {"schema_version": "m5phet.task.draft2", "request_id": request_id,
                    "as_of": config["as_of"], "fitted_state_ref": config["state"],
-                   **COMBINATION, "task_id": self._manifest["task_id"], "provider_ref": self.name,
-                   "output_schema": self._output_schema(), "data": copy.deepcopy(data),
+                   **bundle.combination, "task_id": bundle.manifest["task_id"], "provider_ref": self.name,
+                   "output_schema": bundle.output_schema(), "data": copy.deepcopy(data),
                    "population": {"input_sha256": digest(data)},
                    "execution_constraints": {"partial_results": False}}
         self._check_request(request)
         return request
 
     def chat_examples(self):
-        """Actual DEV history from explicit export; no model load, training or synthetic fallback."""
-        if self._manifest is None:
-            return []
-        request = json.loads((self._bundle / "example_request.json").read_text())
-        self._check_request(request)
-        return [{"title": "DEVELOPMENT: retained household-power model, 60-minute forecast",
-                 "prompt": "forecast Global_active_power at 60 steps", "data": request["data"],
-                 "config": {"input": "json", "provider": self.name, "family": COMBINATION["family"],
-                            "output_kind": COMBINATION["output_kind"], "state": self._state_ref,
-                            "as_of": request["as_of"], "parameters": {}}}]
+        """Actual DEV history from explicit export; no model load, training or synthetic fallback. One entry per bundle.
+
+        A bundle that shipped no `example_request.json` contributes no example. The examples are history that export
+        WROTE after its parity passed; this provider has no data of its own and will not manufacture a window to fill
+        the gap, because a made-up example would look exactly like a real one in the workbench.
+        """
+        examples = []
+        for bundle in self._bundles:
+            source = bundle.path / "example_request.json"
+            if not source.is_file():
+                continue
+            request = json.loads(source.read_text())
+            self._check_request(request)
+            examples.append({"title": bundle.title,
+                             "prompt": f"forecast {bundle.targets[0]} at {bundle.horizons[0]} steps",
+                             "data": request["data"],
+                             "config": {"input": "json", "provider": self.name,
+                                        "family": bundle.combination["family"],
+                                        "output_kind": bundle.combination["output_kind"],
+                                        "state": bundle.state_ref, "as_of": request["as_of"], "parameters": {}}})
+        return examples

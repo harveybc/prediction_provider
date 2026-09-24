@@ -15,6 +15,12 @@ def main(argv=None):
     export.add_argument("--predictor-root", type=Path, required=True)
     export.add_argument("--run-root", type=Path, required=True)
     export.add_argument("--out", type=Path, required=True)
+    example = commands.add_parser("export-predictor-example",
+                                  help="export one committed predictor example checkpoint, never train")
+    example.add_argument("--predictor-root", type=Path, required=True)
+    example.add_argument("--inference-config", type=Path, required=True,
+                         help="a predictor inference config carrying load_model and x_train_file")
+    example.add_argument("--out", type=Path, required=True)
     caps = commands.add_parser("capabilities")
     caps.add_argument("--bundle", type=Path)
     load = commands.add_parser("load")
@@ -33,6 +39,9 @@ def main(argv=None):
         if args.command == "export-dev":
             from .export import export_dev
             result = export_dev(args.predictor_root, args.run_root, args.out)
+        elif args.command == "export-predictor-example":
+            from .export import export_predictor_example
+            result = export_predictor_example(args.predictor_root, args.inference_config, args.out)
         else:
             provider = ForecastProvider(args.bundle)
             if args.command == "capabilities":

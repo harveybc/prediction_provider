@@ -1,6 +1,6 @@
 {
   "date": "2026-09-24",
-  "scope": "native forecast provider, not the five-provider application",
+  "scope": "native forecast provider serving several exported bundles, not the five-provider application",
   "reviewer": "implementation agent; no independent review claimed",
   "environment": {
     "python": "3.12",
@@ -26,14 +26,29 @@
   "model_sha256": "63fdcc38a25a639e28c2226eb86f120ffa35462a41778d57de36b0b78f2ca0d5",
   "input_sha256": "a4a4598bce72d3723055300d84d797df4ea18e28bdf5f0689315d06061f75ffb",
   "population": "first DEV TRAIN origin, row 59; only Xs history rows 0..59, no labels",
-  "native_values": [[0.5412255525588989]],
-  "provider_values": [[0.5412255525588989]],
+  "native_values": [
+    [
+      0.5412255525588989
+    ]
+  ],
+  "provider_values": [
+    [
+      0.5412255525588989
+    ]
+  ],
   "max_absolute_error": 0.0,
-  "parity_tolerance": {"rtol": 0.000001, "atol": 0.000001},
+  "parity_tolerance": {
+    "rtol": 1e-06,
+    "atol": 1e-06
+  },
   "fresh_process_cli_replay": "PASS",
   "chat_request_cli": "PASS",
-  "artifact_free_contract_tests": {"passed": 19},
-  "provider_real_artifact_suite": {"passed": 51},
+  "artifact_free_contract_tests": {
+    "passed": 19
+  },
+  "provider_real_artifact_suite": {
+    "passed": 51
+  },
   "with_actual_registry": {
     "passed": 54,
     "skipped": 0,
@@ -44,7 +59,11 @@
     "route": "Engine.execute with provider chat_examples and a DEVELOPMENT JSON attachment",
     "tensorflow_imported_in_host": false,
     "native_process": "separate operator-configured Python 3.12 / TensorFlow 2.21 environment",
-    "payload_values": [[0.5412255525588989]],
+    "payload_values": [
+      [
+        0.5412255525588989
+      ]
+    ],
     "main_environment_dependencies_changed": false,
     "running_web_server_restarted": false
   },
@@ -55,5 +74,67 @@
   "calibration_claimed": false,
   "governance_accepted": false,
   "application_eligible": false,
-  "open_integration": "operator installs the lightweight package and sets bundle/native-Python environment in the running web service; no code or artifact blockers remain"
+  "open_integration": "operator installs the lightweight package and sets bundle/native-Python environment in the running web service; no code or artifact blockers remain",
+  "multi_bundle_widening_2026_09_24": {
+    "date": "2026-09-24",
+    "bundles_served": 2,
+    "bundle_root": "/home/harveybc/.local/state/m5phet/forecast-bundles-20260924",
+    "household_bundle_unchanged": true,
+    "household_value_from_inside_a_directory": 0.5412255525588989,
+    "second_bundle": {
+      "path": "/home/harveybc/.local/state/m5phet/forecast-predictor-direction-dev-20260924",
+      "source": "predictor examples/results/phase_1c_direction/phase_1c_direction_cnn_direction_long_model.keras",
+      "predictor_commit": "90321420b4ff8a59b25297218ed55afa279e14f1",
+      "trained_by": "Harvey Bastidas in predictor, with the direction_cnn plugin; commit 90321420b4ff8a59b25297218ed55afa279e14f1: Add champion LONG direction CNN model and optimization parameters from distributed optimization (fitness=0.4357)",
+      "trained_at": "2026-04-15T01:00:07-05:00",
+      "quality": "UNMEASURED",
+      "exposure": "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT",
+      "state_ref": "phase-1c-direction-cnn-direction-long:6f14a78ee2a1c6a4c623234bd3144799d01dd7f6188e94163c77f60759d2ea99",
+      "target": "direction_long",
+      "horizons": [
+        1
+      ],
+      "unit": "probability",
+      "window": 71,
+      "columns": 28,
+      "step_seconds": 14400,
+      "native_values": [
+        [
+          0.6035091876983643
+        ]
+      ],
+      "provider_values": [
+        [
+          0.6035091876983643
+        ]
+      ],
+      "max_absolute_error": 0.0,
+      "fresh_process_cli_replay": "PASS",
+      "model_sha256": "0c650a2f4d6a3ebc19e24944c75525f82413f7dda3efc2671bc537a5582f025b",
+      "train_data_sha256": "a7911a851af1e4b6356ab36741e8a165cad2a028695549475400bff21bae634d",
+      "predictor_source_hashes": {
+        "preprocessor_plugins/stl_preprocessor.py": "f0f00873959e0517a0e0a390f9fdd472792a23c21a35334bde30d326f82ffbdf"
+      },
+      "no_training": true,
+      "no_heldout_scoring": true,
+      "device": "CPU",
+      "quality_measured_here": false
+    },
+    "suite": {
+      "passed": 89,
+      "skipped": 2,
+      "was": {
+        "passed": 69,
+        "skipped": 2
+      },
+      "skips": "the two actual-M5PHET-runtime integrations; m5phet is not importable from the native interpreter"
+    },
+    "adjusted_test": {
+      "test": "tests/test_chat_slots.py::test_untrained_target_is_refused_with_the_vocabulary_named",
+      "why": "the installed m5phet.interpret gained an unsupported_named pass and now answers UNSUPPORTED_VALUE where it answered MISSING_PARAMETER; the committed provider fails the old assertion too, so the change is external",
+      "now_asserts": "either refusal status, with the untrained target still absent from parameters and named in why"
+    },
+    "predictor_repository_written_to": false,
+    "reviewer": "implementation agent; no independent review claimed"
+  }
 }

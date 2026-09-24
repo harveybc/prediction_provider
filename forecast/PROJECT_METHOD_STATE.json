@@ -1,21 +1,70 @@
 {
   "initiative": "m5phet-native-forecast",
   "current_stage": "S14_RELEASE_OPERATION",
-  "completed_stages": ["S0_DISCOVERY", "S1_REQUIREMENTS", "S2_USE_CASES", "S3_ACCEPTANCE_TEST_DESIGN", "S4_ARCHITECTURE", "S5_SYSTEM_TEST_DESIGN", "S6_COMPONENT_DESIGN", "S7_INTEGRATION_TEST_DESIGN", "S8_UNIT_TEST_DESIGN", "S9_UNIT_IMPLEMENTATION", "S10_INTEGRATION_VERIFICATION", "S11_SYSTEM_VERIFICATION", "S12_ALPHA_ACCEPTANCE"],
-  "stage_scope": "S10-S12 cover provider/native export/CLI, Registry/runtime and the actual web Engine forecast route; not the other four providers",
-  "optional_stages": {"S13_BETA_ACCEPTANCE": "DEFERRED; no independent beta requested"},
+  "completed_stages": [
+    "S0_DISCOVERY",
+    "S1_REQUIREMENTS",
+    "S2_USE_CASES",
+    "S3_ACCEPTANCE_TEST_DESIGN",
+    "S4_ARCHITECTURE",
+    "S5_SYSTEM_TEST_DESIGN",
+    "S6_COMPONENT_DESIGN",
+    "S7_INTEGRATION_TEST_DESIGN",
+    "S8_UNIT_TEST_DESIGN",
+    "S9_UNIT_IMPLEMENTATION",
+    "S10_INTEGRATION_VERIFICATION",
+    "S11_SYSTEM_VERIFICATION",
+    "S12_ALPHA_ACCEPTANCE"
+  ],
+  "stage_scope": "S10-S12 cover provider/native export/CLI, Registry/runtime, the actual web Engine forecast route and the multi-bundle widening; not the other four providers",
+  "optional_stages": {
+    "S13_BETA_ACCEPTANCE": "DEFERRED; no independent beta requested"
+  },
   "traceability": "docs/TRACEABILITY.md",
   "evidence": "docs/VERIFICATION.json",
-  "next_allowed_actions": ["install forecast/ --no-deps into the main CPU-local environment", "configure exported DEV bundle and optional native Python", "main operator enables the provider in the running web process"],
-  "blocked_actions": ["train", "heldout scoring", "GPU", "external model calls", "M5PHET edits"],
+  "next_allowed_actions": [
+    "reinstall forecast/ --no-deps into the chat-venv web environment so it serves this code",
+    "point M5PHET_FORECAST_BUNDLE at the multi-bundle root",
+    "export further predictor example checkpoints with export-predictor-example",
+    "main operator enables the widened provider in the running web process"
+  ],
+  "blocked_actions": [
+    "train",
+    "heldout scoring",
+    "GPU",
+    "external model calls",
+    "M5PHET edits"
+  ],
   "missing_artifacts": [],
   "open_integration": "runtime validator and actual web Engine route now pass; only operator service configuration remains",
   "history": [
-    {"stage": "S8_UNIT_TEST_DESIGN", "note": "Native retained DEV artifacts inspected; acceptance and negative tests designed before implementation."},
-    {"stage": "S9_UNIT_IMPLEMENTATION", "note": "Provider, explicit exporter, bounded chat grammar, chat_examples and lightweight entry point implemented."},
-    {"stage": "S10_INTEGRATION_VERIFICATION", "note": "Actual trained weights restored through native factory; native/export/provider equality verified on DEV TRAIN history, no scoring."},
-    {"stage": "S11_SYSTEM_VERIFICATION", "note": "Initially 51 provider tests passed with one external runtime skip. After main supplied its validator: 54 tests pass, no skips; actual web Engine in main environment returns OK using isolated CPU subprocess without TensorFlow in host."},
-    {"stage": "S12_ALPHA_ACCEPTANCE", "note": "F1-F7 accepted for the provider scope with explicit DEV-only evidence limits."},
-    {"stage": "S14_RELEASE_OPERATION", "note": "Reproducible install/export/infer commands and portable local bundle available; local commit handoff."}
+    {
+      "stage": "S8_UNIT_TEST_DESIGN",
+      "note": "Native retained DEV artifacts inspected; acceptance and negative tests designed before implementation."
+    },
+    {
+      "stage": "S9_UNIT_IMPLEMENTATION",
+      "note": "Provider, explicit exporter, bounded chat grammar, chat_examples and lightweight entry point implemented."
+    },
+    {
+      "stage": "S10_INTEGRATION_VERIFICATION",
+      "note": "Actual trained weights restored through native factory; native/export/provider equality verified on DEV TRAIN history, no scoring."
+    },
+    {
+      "stage": "S11_SYSTEM_VERIFICATION",
+      "note": "Initially 51 provider tests passed with one external runtime skip. After main supplied its validator: 54 tests pass, no skips; actual web Engine in main environment returns OK using isolated CPU subprocess without TensorFlow in host."
+    },
+    {
+      "stage": "S12_ALPHA_ACCEPTANCE",
+      "note": "F1-F7 accepted for the provider scope with explicit DEV-only evidence limits."
+    },
+    {
+      "stage": "S14_RELEASE_OPERATION",
+      "note": "Reproducible install/export/infer commands and portable local bundle available; local commit handoff."
+    },
+    {
+      "stage": "S14_RELEASE_OPERATION",
+      "note": "Widened from one bundle to a directory of bundles: union capabilities/slots, one-bundle resolution with ambiguity refused by name, provenance required for service, and a second REAL predictor model exported (phase_1c_direction direction_cnn champion, EUR/USD direction_long probability). 89 passed, 2 skipped; the retained household value 0.5412255525588989 reproduces from inside the directory."
+    }
   ]
 }

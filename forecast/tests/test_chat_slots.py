@@ -172,7 +172,11 @@ def test_unsupported_horizon_is_refused_by_name_never_rounded(ready):
 def test_untrained_target_is_refused_with_the_vocabulary_named(ready, manifest):
     p, _ = ready
     report = offline_interpret("forecast the Voltage at 60 steps", p.chat_slots())
-    assert report["status"] == INTERPRET.STATUS_MISSING
+    # Two refusals are correct here and the workbench owns which one it gives: MISSING_PARAMETER when no target was
+    # recognised at all, and UNSUPPORTED_VALUE once the interpreter matches the name against the `known_unsupported`
+    # vocabulary this provider declares. What this test pins is the part that belongs to the provider -- Voltage never
+    # becomes a parameter, and the refusal names the target it does have -- not which of the two labels came back.
+    assert report["status"] in (INTERPRET.STATUS_MISSING, INTERPRET.STATUS_UNSUPPORTED)
     assert "target" in report["why"] and manifest["targets"][0] in report["why"]
     assert "target" not in report["parameters"]
 
