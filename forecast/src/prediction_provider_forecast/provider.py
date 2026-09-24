@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -51,6 +51,22 @@ EXPOSURES = ("DEV_ONLY_NO_TEST_ACCESS", "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT")
 #: what a v2 bundle must say about where its weights came from. A bundle that cannot say what it was trained on, by whom
 #: and when is refused at construction: serving it would put an unattributable model behind a confident answer.
 REQUIRED_PROVENANCE = ("trained_on", "trained_by", "trained_at", "quality")
+
+#: refusal codes of the question envelope (`m5phet.questions`), spelled here because the native interpreter that runs
+#: this package does not carry `m5phet`. A refusal is a statement about the engine or the request, never about the
+#: answer, and it carries no number.
+NOT_ESTIMABLE = "NOT_ESTIMABLE"
+STATE_REQUIRED = "STATE_REQUIRED"
+MALFORMED_QUESTION = "MALFORMED_QUESTION"
+PROVIDER_ERROR = "PROVIDER_ERROR"
+
+#: why an interval or an anomaly risk is refused by every bundle this package serves. The retained graphs are point
+#: models: one number per target and horizon, no quantile head, no ensemble, no residual distribution recorded at
+#: export. A bound or a probability of crossing a threshold would have to be manufactured from nothing, so both types are
+#: DECLARED (the shape is visible and the refusal is typed) and REFUSED with this reason. The day a bundle carries
+#: quantiles, that is where an interval gets computed -- not before.
+NO_DISTRIBUTION = ("it emits a point estimate and no predictive distribution; an interval would require a quantile or "
+                   "ensemble head this bundle does not have")
 
 
 def digest(value):
@@ -323,8 +339,15 @@ class _Bundle:
                 raise ValueError(f"native artifact hash mismatch: {name}")
 
 
+def _refusal(kind, why, question_type):
+    """The envelope's refusal shape, byte for byte what `m5phet.questions.refusal` builds."""
+    return {"status": "REFUSED", "refusal": kind, "why": why, "type": question_type}
+
+
 class ForecastProvider:
     name = "predictor_forecast"
+    #: the one area of the question envelope this provider takes part in
+    area = "forecasting"
 
     def __init__(self, bundle=None):
         configured = bundle or os.environ.get("M5PHET_FORECAST_BUNDLE")
@@ -638,3 +661,109 @@ class ForecastProvider:
                                         "output_kind": bundle.combination["output_kind"],
                                         "state": bundle.state_ref, "as_of": request["as_of"], "parameters": {}}})
         return examples
+
+    # ------------------------------------------------------------------ the question envelope
+
+    def question_types(self):
+        """The types a caller may ask this area, with the fields each takes.
+
+        `interval` and `anomaly_risk` are declared on purpose although every configured bundle refuses them: a type the
+        area does not declare is refused by the envelope as UNSUPPORTED_QUESTION_TYPE, which says only that the word is
+        unknown here. Declaring them lets the refusal say the true thing -- the model exists, it answers the point
+        forecast, and it has no distribution to bound -- and it lets the catalog show the shape a future bundle with a
+        quantile head would fill."""
+        return {"point_forecast": {"required": ["horizon"], "optional": ["target"]},
+                "interval": {"required": ["horizon", "confidence_level"], "optional": ["target"]},
+                "anomaly_risk": {"required": ["threshold"], "optional": ["horizon", "target"]}}
+
+    def _resolve_question(self, state, question):
+        """The one bundle a question is about, or a refusal naming why there is not exactly one.
+
+        The state names a bundle by `state_ref` or by `target_variable`; the question may name its own `target`. A
+        horizon must be one the bundle has -- an unsupported horizon is refused by name, never rounded to the nearest one
+        that exists. A target two bundles hold is an ambiguity refused with both named, exactly as `chat_request` does."""
+        kind = question["type"]
+        target = question.get("target", state.get("target_variable"))
+        if "target" in question and "target_variable" in state and question["target"] != state["target_variable"]:
+            return None, _refusal(MALFORMED_QUESTION, f"the question names target {question['target']!r} and the state "
+                                                     f"names target_variable {state['target_variable']!r}; one series, "
+                                                     f"one name", kind)
+        state_ref = state.get("state_ref")
+        if state_ref is None and target is None:
+            return None, _refusal(STATE_REQUIRED, "the state must name a fitted model by `state_ref` or a series by "
+                                                  f"`target_variable`; this provider holds {self.known_states()}", kind)
+        if state_ref is not None:
+            bundle = next((b for b in self._bundles if b.state_ref == state_ref), None)
+            if bundle is None:
+                return None, _refusal(STATE_REQUIRED, f"state_ref {state_ref!r} is not a state this provider holds; it "
+                                                      f"holds {self.known_states()}", kind)
+            if target is not None and target not in bundle.targets:
+                return None, _refusal(NOT_ESTIMABLE, f"fitted state {state_ref!r} forecasts {bundle.targets[0]!r}, "
+                                                     f"not {target!r}", kind)
+        else:
+            holders = [b for b in self._bundles if target in b.targets]
+            if not holders:
+                return None, _refusal(NOT_ESTIMABLE, f"no configured bundle forecasts {target!r}; available: "
+                                                     f"{self._available()}", kind)
+            if len(holders) > 1:
+                named = " and ".join(b.state_ref for b in holders)
+                return None, _refusal(STATE_REQUIRED, f"{target!r} is served by more than one configured bundle "
+                                                      f"({named}); name the fitted state by `state_ref` instead of "
+                                                      f"letting this pick one", kind)
+            bundle = holders[0]
+        horizon = question.get("horizon")
+        if horizon is not None:
+            if type(horizon) is not int or horizon <= 0:
+                return None, _refusal(MALFORMED_QUESTION, f"horizon must be a positive integer number of steps, not "
+                                                         f"{horizon!r}", kind)
+            if horizon not in bundle.horizons:
+                return None, _refusal(NOT_ESTIMABLE, f"{bundle.targets[0]!r} ({bundle.state_ref}) is trained for "
+                                                     f"horizons {bundle.horizons}, not {horizon}; a horizon this "
+                                                     f"model was not trained for is refused, not rounded", kind)
+        return bundle, None
+
+    def _point_forecast(self, bundle, question, data, as_of):
+        """The real engine, on the same path the workbench takes: `chat_request` builds and checks the request, `load`
+        verifies the artifact, `infer` runs the native graph. Nothing about the number is computed here."""
+        if isinstance(data, list) and len(data) == 1:
+            data = data[0]                                 # the workbench attaches a list of one history window
+        config = {"input": "json", "provider": self.name, "family": bundle.combination["family"],
+                  "output_kind": bundle.combination["output_kind"], "state": bundle.state_ref,
+                  "as_of": as_of or datetime.now(timezone.utc).isoformat(), "parameters": {}}
+        request = self.chat_request(f"forecast {bundle.targets[0]} at {question['horizon']} steps", data, config,
+                                    parameters={"target": bundle.targets[0], "horizon": question["horizon"]})
+        result = self.infer(request, self.load(bundle.state_ref))
+        payload = result["outputs"][bundle.targets[0]]["payload"]
+        at = payload["horizons"].index(question["horizon"])
+        return {"type": "point_forecast", "values": [payload["values"][0][at]],
+                "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
+                "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
+                "uncertainty": "none", "execution_authorized": False}
+
+    def answer_questions(self, state, questions, data, as_of):
+        """Every question on its own: a point forecast from the graph that has one, a typed refusal for a distribution
+        no graph has. A question that fails is refused by name; it never takes the others down with it."""
+        answers, used = {}, []
+        for name, question in questions.items():
+            kind = question["type"]
+            bundle, refused = self._resolve_question(state, question)
+            if refused is not None:
+                answers[name] = refused
+                continue
+            if kind == "interval":
+                answers[name] = _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {NO_DISTRIBUTION}", kind)
+            elif kind == "anomaly_risk":
+                answers[name] = _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {NO_DISTRIBUTION}; a probability "
+                                                        f"of crossing {question['threshold']!r} is a statement about "
+                                                        f"that distribution", kind)
+            else:
+                try:
+                    answers[name] = self._point_forecast(bundle, question, data, as_of)
+                except (ValueError, RuntimeError) as exc:
+                    answers[name] = _refusal(PROVIDER_ERROR, f"{type(exc).__name__}: {exc}", kind)
+                    continue
+            if bundle.state_ref not in used:
+                used.append(bundle.state_ref)
+        # one fitted state answered the envelope, or none can be named for it
+        answers["__state_ref__"] = used[0] if len(used) == 1 else None
+        return answers
