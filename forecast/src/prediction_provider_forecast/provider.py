@@ -272,7 +272,12 @@ class ForecastProvider:
             if h == 60:
                 names += ["one hour", "an hour", "next hour", "una hora", "la proxima hora", "próxima hora"]
             horizon_aliases[str(h)] = names
-        return [{"name": "target", "allowed": list(targets), "aliases": aliases},
+        # What this bundle has and does NOT have. Naming a column it holds as input but does not forecast is refused before
+        # any interpreter is consulted; otherwise a model asked to choose among the allowed values chooses the only one and
+        # answers confidently about a different series.
+        untrained = [c for c in (self._manifest.get("columns") or []) if c not in targets]
+        return [{"name": "target", "allowed": list(targets), "aliases": aliases,
+                 "known_unsupported": untrained},
                 {"name": "horizon", "allowed": [int(h) for h in horizons], "type": "integer",
                  "aliases": horizon_aliases,
                  "number_hints": ["step", "horizon", "minute", "hour", "ahead", "paso", "minuto", "hora", "adelante"]}]
