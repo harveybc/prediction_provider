@@ -1,0 +1,59 @@
+{
+  "date": "2026-09-24",
+  "scope": "native forecast provider, not the five-provider application",
+  "reviewer": "implementation agent; no independent review claimed",
+  "environment": {
+    "python": "3.12",
+    "tensorflow": "2.21.0",
+    "numpy": "2.5.1",
+    "device": "CPU",
+    "installation": "dedicated venv with read-only system site packages from existing native environment; editable provider installed --no-deps",
+    "clean_dependency_install_reexecuted": false
+  },
+  "native_source_commit": "5c9a14d50233efd7a08b2564ade2be748c079f67",
+  "source_run": "e1_household_successor_v3",
+  "cell_id": "R0_s1",
+  "weights_sha256": "a8cae27a6c1cf032a1cfb4ab9bbe5b24278fc04527076dd4e4492f7d07688119",
+  "data_sha256": "70485ac9d1a41ac86d0910d23928a15c1aa88737c6261343e4c7dc248e30c194",
+  "design_sha256": "143abb57d97daa07e3f5228eadf4e3f1a0deb5fe30eb95ca065663f76ff888a7",
+  "native_source_hashes": {
+    "tools/df_e1_pilot.py": "12a31e3cd14555e91c6b78e9f53054858fe5849fbf422bc5c7c159147e369a05",
+    "tools/df_mod_e0.py": "034745160f278c26959fa62812336ef6f356715edf236d201472c24b32b0ef8c",
+    "tools/df_e1_loader.py": "2421dc2dd4526040fe4d6d47e719eba5db3f58a786f405aa34bff92b66c0bc8b",
+    "tools/df_e1_regimes.py": "c36421d435e25b29332f6cc2211bdb8dea8d617b7dda58286d29281fa945a282"
+  },
+  "state_digest": "15bd0451df2825747935dc9e8b865670acb7bbdf9406cfa937e136f032ccc1d7",
+  "model_sha256": "63fdcc38a25a639e28c2226eb86f120ffa35462a41778d57de36b0b78f2ca0d5",
+  "input_sha256": "a4a4598bce72d3723055300d84d797df4ea18e28bdf5f0689315d06061f75ffb",
+  "population": "first DEV TRAIN origin, row 59; only Xs history rows 0..59, no labels",
+  "native_values": [[0.5412255525588989]],
+  "provider_values": [[0.5412255525588989]],
+  "max_absolute_error": 0.0,
+  "parity_tolerance": {"rtol": 0.000001, "atol": 0.000001},
+  "fresh_process_cli_replay": "PASS",
+  "chat_request_cli": "PASS",
+  "artifact_free_contract_tests": {"passed": 19},
+  "provider_real_artifact_suite": {"passed": 51},
+  "with_actual_registry": {
+    "passed": 54,
+    "skipped": 0,
+    "includes": "actual runtime point_forecast validation and isolated native-process parity"
+  },
+  "actual_web_engine_in_main_environment": {
+    "status": "OK",
+    "route": "Engine.execute with provider chat_examples and a DEVELOPMENT JSON attachment",
+    "tensorflow_imported_in_host": false,
+    "native_process": "separate operator-configured Python 3.12 / TensorFlow 2.21 environment",
+    "payload_values": [[0.5412255525588989]],
+    "main_environment_dependencies_changed": false,
+    "running_web_server_restarted": false
+  },
+  "no_training": true,
+  "no_heldout_scoring": true,
+  "external_models_called": false,
+  "execution_authorized": false,
+  "calibration_claimed": false,
+  "governance_accepted": false,
+  "application_eligible": false,
+  "open_integration": "operator installs the lightweight package and sets bundle/native-Python environment in the running web service; no code or artifact blockers remain"
+}
