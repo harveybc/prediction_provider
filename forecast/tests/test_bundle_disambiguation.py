@@ -26,8 +26,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from prediction_provider_forecast import ForecastProvider                                         # noqa: E402
-from prediction_provider_forecast.provider import (NOT_ESTIMABLE, REPRESENTATION_NOT_RECORDED,    # noqa: E402
-                                                   STATE_REQUIRED)
+from prediction_provider_forecast.provider import (ERROR_NOT_RECORDED, NOT_ESTIMABLE,              # noqa: E402
+                                                   REPRESENTATION_NOT_RECORDED, STATE_REQUIRED)
 from test_multi_bundle import metadata_bundle, window_for                                         # noqa: E402
 
 TARGET = "Global_active_power"
@@ -133,6 +133,45 @@ def test_the_bundle_slot_declares_every_engine_and_the_words_that_name_one(house
     assert shared == set()
 
 
+def test_the_sentence_path_answers_from_the_bundle_the_sentence_NAMED(household_pair):
+    """The slot existed and its value was never read: `chat_request` resolved only `config["state"]`.
+
+    So "forecast X with <state_id>" declared an engine, the interpreter resolved it against the declared vocabulary,
+    and the request was then built as if nothing had been said. The ladder is the declared one -- state first, the
+    named bundle second -- and both rungs are exercised here.
+    """
+    quantile = state_of(household_pair, "household-quantile")
+    data = window_for(household_pair, quantile)
+    config = {"input": "json", "provider": household_pair.name, "family": "regression_forecasting",
+              "output_kind": "point_forecast", "state": "", "as_of": "2026-09-25T00:00:00Z", "parameters": {}}
+    request = household_pair.chat_request(f"forecast {TARGET} at 60 steps", data, config,
+                                          parameters={"target": TARGET, "horizon": 60, "bundle": "household-quantile"})
+    assert request["fitted_state_ref"] == quantile
+    # and the state, when the workbench fills it from a chosen example, still wins over the slot
+    point = state_of(household_pair, "household-point")
+    request = household_pair.chat_request(f"forecast {TARGET} at 60 steps", window_for(household_pair, point),
+                                          dict(config, state=point),
+                                          parameters={"target": TARGET, "horizon": 60, "bundle": "household-quantile"})
+    assert request["fitted_state_ref"] == point
+
+
+def test_a_blank_state_or_slot_is_nothing_declared_and_not_a_bundle_called_empty(household_pair):
+    """The workbench's own defaults carry `state: ""`, and an optional slot nobody filled comes back empty.
+
+    Both used to reach the name resolver and be refused as a bundle named '', which turned "say nothing and let the
+    kind of answer decide" -- the documented third rung -- into an error nobody could act on.
+    """
+    data = window_for(household_pair, state_of(household_pair, "household-point"))
+    config = {"input": "json", "provider": household_pair.name, "family": "regression_forecasting",
+              "output_kind": "point_forecast", "state": "", "as_of": "2026-09-25T00:00:00Z", "parameters": {}}
+    for parameters in ({"target": TARGET, "horizon": 60},
+                       {"target": TARGET, "horizon": 60, "bundle": ""},
+                       {"target": TARGET, "horizon": 60, "bundle": "   "}):
+        request = household_pair.chat_request(f"forecast {TARGET} at 60 steps", data, config, parameters=parameters)
+        # the third rung decides: a point_forecast means the bundle without a quantile head
+        assert request["fitted_state_ref"] == state_of(household_pair, "household-point")
+
+
 def test_one_bundle_declares_no_bundle_slot(tmp_path):
     provider = ForecastProvider(metadata_bundle(tmp_path, "only", state_id="only", target=TARGET, horizons=(60,)))
     assert [slot["name"] for slot in provider.chat_slots()] == ["target", "horizon"]
@@ -163,6 +202,53 @@ def test_a_representation_that_is_not_a_spec_is_refused_rather_than_served_as_ab
     path = metadata_bundle(tmp_path, "vague", state_id="vague", target=TARGET, horizons=(60,),
                            representation_spec={"windows": [74]})
     with pytest.raises(ValueError, match="representation_spec"):
+        ForecastProvider(path)
+
+
+# ------------------------------------------------------------------ WP27: what this bundle measured, and on which rows
+
+#: the shape `export.measured_error_from_report` writes: the report's own metric values plus every condition a reader
+#: needs to go back to the report and check them
+MEASURED = {"source": "m5phet-evaluation-report/1", "metric_set": "forecast",
+            "values": {"mae": 0.5658380994350456, "skill_mae": 0.15188751208001805},
+            "baseline": {"name": "last_value", "mae": 0.6671734085920351, "same_rows_as_model": True},
+            "scale": "kW", "target": TARGET, "horizon": "h+60",
+            "corpus_seal": "d4ac73f0adde05d1", "protocol_digest": "48b783f88f54", "sealed_rows": 9567,
+            "sealed_at": "2026-09-25T18:00:00Z", "report_sha256": "f" * 64,
+            "computed_by": "M5PHET/evaluation, not this package",
+            "conditions": "measured on the sealed population named above and on no other rows"}
+
+
+def test_a_bundle_that_quotes_no_error_says_so_rather_than_nothing(household_pair):
+    caps = household_pair.capabilities()
+    assert [entry["measured_error"] for entry in caps["bundles"]] == [ERROR_NOT_RECORDED] * 2
+
+
+def test_a_quoted_error_reaches_the_catalog_with_its_seal(tmp_path):
+    provider = ForecastProvider(metadata_bundle(tmp_path, "confirmed", state_id="confirmed", target=TARGET,
+                                                horizons=(60,), measured_error=MEASURED))
+    entry = provider.capabilities()["bundles"][0]
+    assert entry["measured_error"] == MEASURED
+    # the conditions travel with the number, every time it is rendered
+    assert entry["measured_error"]["corpus_seal"] == "d4ac73f0adde05d1"
+    assert entry["measured_error"]["sealed_rows"] == 9567
+    # and quoting it changes nothing about what this package claims to have computed
+    assert provider._bundles[0].manifest["provenance"]["quality"] == "UNMEASURED"
+
+
+def test_an_error_without_its_population_is_refused_rather_than_served(tmp_path):
+    for missing in ("corpus_seal", "sealed_rows", "report_sha256", "conditions"):
+        payload = {k: v for k, v in MEASURED.items() if k != missing}
+        path = metadata_bundle(tmp_path / missing, "loose", state_id="loose", target=TARGET, horizons=(60,),
+                               measured_error=payload)
+        with pytest.raises(ValueError, match="measured_error"):
+            ForecastProvider(path)
+
+
+def test_an_error_that_is_not_a_metric_block_is_refused(tmp_path):
+    path = metadata_bundle(tmp_path, "number", state_id="number", target=TARGET, horizons=(60,),
+                           measured_error=0.5658)
+    with pytest.raises(ValueError, match="measured_error"):
         ForecastProvider(path)
 
 

@@ -503,6 +503,87 @@ FITTED_SCHEMA = "predictor.fitted_forecast.v1"
 FITTED_EXPOSURE = "DEV_FIT_HOLDOUT_SEALED_BEFORE_SCORING"
 
 
+def measured_error_from_report(report, *, report_sha256):
+    """The held-out error the evaluation package measured, QUOTED from its report with the conditions that bind it.
+
+    This is not a quality this package computed, and it does not change `provenance.quality`, which stays `UNMEASURED`
+    for exactly that reason. It is the report's own first metric set, copied by value together with the corpus seal,
+    the protocol digest, the row count and the digest of the file it was read from -- everything a reader needs to go
+    back to the report and check it. A number without those conditions is the thing this package refuses to publish;
+    a number with them is the report speaking, and a catalog that cannot repeat what the report says forces every
+    reader to be told the error out of band.
+
+    Nothing here says the model is good, and nothing here says the number generalises: the population is whatever the
+    seal names, and whether those rows ever ranked this model is a question the seal cannot answer and this block does
+    not pretend to.
+    """
+    metric_set = (report.get("metric_sets") or [None])[0]
+    if not isinstance(metric_set, dict) or not isinstance(metric_set.get("values"), dict):
+        raise ValueError("the evaluation report carries no metric set; a bundle cannot quote an error from it")
+    baseline = metric_set.get("baseline") or {}
+    return {
+        "source": "m5phet-evaluation-report/1",
+        "metric_set": metric_set.get("name"),
+        "values": dict(metric_set["values"]),
+        "baseline": {"name": baseline.get("name"), "mae": baseline.get("mae"), "rmse": baseline.get("rmse"),
+                     "same_rows_as_model": baseline.get("same_rows_as_model")},
+        "scale": report.get("scale"),
+        "target": report.get("target"),
+        "horizon": report.get("horizon"),
+        "corpus_seal": report.get("corpus_seal"),
+        "protocol_digest": report.get("protocol_digest"),
+        "sealed_rows": report.get("sealed_row_count"),
+        "sealed_at": report.get("sealed_at"),
+        "label_provenance": report.get("label_provenance"),
+        "label_source": report.get("label_source"),
+        "report_sha256": report_sha256,
+        "computed_by": ("M5PHET/evaluation, not this package; this package scored nothing and its "
+                        "provenance.quality stays UNMEASURED"),
+        "conditions": ("this error is the value measured on the sealed population named above and on no other rows. "
+                       "It is not a guarantee for other rows, other weeks or other households, and it says nothing "
+                       "about whether those rows were used to choose this model -- read the round that produced them"),
+    }
+
+
+def fitted_custom_objects():
+    """Loader-side implementations of the custom layers predictor's model plugins write into a saved graph.
+
+    A graph whose branch reads a SUBSET of the input columns carries a gather layer, and a saved layer is only as
+    loadable as the code that can rebuild it. Two ways were available and only one of them is honest:
+
+    * import predictor's plugin package here -- which would make a *servable* bundle of this package depend, at load
+      time, on the repository that trained it, and on that repository's TensorFlow-Probability stack;
+    * rebuild the layer from the configuration THE FILE CARRIES. The gather's channel indices are in its own config
+      (``indices``), written there by the fitting plugin, so nothing is re-derived from the column names -- a
+      re-derivation would look exactly like the original and could gather other columns.
+
+    This is the second. It reads, it does not infer. A graph saved before predictor made that layer serialisable (a
+    bare ``Lambda`` over a closure) cannot be loaded by anybody, including the process that saved it, and is refused
+    here with the loader's own message rather than repaired by a guess.
+    """
+    import keras
+
+    @keras.saving.register_keras_serializable(package="prediction_provider_forecast.loader")
+    class GatherColumns(keras.layers.Layer):
+        def __init__(self, indices, **kwargs):
+            super().__init__(**kwargs)
+            self.indices = tuple(int(index) for index in indices)
+
+        def call(self, tensor):
+            import tensorflow as tf_local
+            return tf_local.gather(tensor, tf_local.constant(self.indices, dtype=tf_local.int32), axis=-1)
+
+        def compute_output_shape(self, input_shape):
+            return tuple(input_shape[:-1]) + (len(self.indices),)
+
+        def get_config(self):
+            config = super().get_config()
+            config["indices"] = list(self.indices)
+            return config
+
+    return {"predictor_plugins.fused_branches>GatherColumns": GatherColumns, "GatherColumns": GatherColumns}
+
+
 def export_fitted_forecast(fit_root, destination, *, state_id=None, title=None):
     """Export one graph fitted by `tools/fit_pipeline_spec.py` as a servable v2 bundle. Never trains, never scores."""
     return _staged(destination, lambda staging: _export_fitted_forecast(fit_root, staging, state_id, title))
@@ -581,7 +662,7 @@ def _export_fitted_forecast(fit_root, destination, state_id, title):
               "report": file_digest(report_path)}
     tf = cpu_tensorflow()
     import keras
-    model = keras.saving.load_model(str(model_path), compile=False)
+    model = keras.saving.load_model(str(model_path), compile=False, custom_objects=fitted_custom_objects())
     width = len(horizons) * (len(quantiles) or 1)
     if tuple(model.input_shape) != (None, window, len(columns)):
         raise ValueError(f"the saved graph expects {model.input_shape}, not the window this run manifest describes")
@@ -627,6 +708,11 @@ def _export_fitted_forecast(fit_root, destination, state_id, title):
         "schema": SCHEMA_V2, "engine": "tensorflow_saved_model",
         "exposure": FITTED_EXPOSURE,
         "representation_spec": representation,
+        # WP27: the held-out error the evaluation package measured for THIS graph, quoted with its seal, its protocol
+        # and the digest of the report it came from. `provenance.quality` stays UNMEASURED: this package computed none
+        # of it, and the distinction between "measured elsewhere, quoted here with its conditions" and "measured here"
+        # is the whole point.
+        "measured_error": measured_error_from_report(report, report_sha256=hashes["report"]),
         "state_id": name, "task_id": f"predictor.{name}.W{window}_h{horizons[0]}",
         "title": title or (f"DEVELOPMENT: {fit['stage']} household forecast, "
                            f"{'quantile' if quantiles else 'point'} head at {horizons[0]} steps"),

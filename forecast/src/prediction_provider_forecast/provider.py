@@ -45,6 +45,11 @@ READOUTS = ("target_scaler_inverse", "identity")
 #: arriving with any other value is refused rather than allowed to carry a number this package did not compute.
 UNMEASURED = "UNMEASURED"
 
+#: what a bundle says when it carries no held-out error of its own. Like REPRESENTATION_NOT_RECORDED it is a statement
+#: and not a shrug: "no report was quoted into this bundle" is a different fact from "the model was never measured",
+#: and neither of them is "the model is unmeasurable". A bundle exported before WP27 carries none.
+ERROR_NOT_RECORDED = "ERROR_NOT_RECORDED"
+
 #: what a bundle exported before WP06 recorded representations says when asked which representation produced it. It is
 #: NOT a shrug: it is the difference between "this bundle does not say" and a plausible spec reconstructed by the
 #: server, which would look exactly like a recorded one and could name a window the graph was never fitted with.
@@ -65,6 +70,11 @@ EXPOSURES = ("DEV_ONLY_NO_TEST_ACCESS", "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT",
 #: one number per target and horizon. `quantile` says the graph emits one number per target, horizon AND declared
 #: quantile, which is what makes an interval readable instead of manufactured.
 HEADS = ("point", "quantile")
+
+#: the conditions a quoted error must carry before this package will serve it. Every one of them is what a reader
+#: needs to go back to the report and check the number; a number without them is a claim, not a quotation.
+MEASURED_ERROR_REQUIRED = ("source", "values", "corpus_seal", "protocol_digest", "sealed_rows", "report_sha256",
+                           "conditions")
 
 #: what a v2 bundle must say about where its weights came from. A bundle that cannot say what it was trained on, by whom
 #: and when is refused at construction: serving it would put an unattributable model behind a confident answer.
@@ -243,6 +253,22 @@ class _Bundle:
         return copy.deepcopy(declared)
 
     @property
+    def measured_error(self):
+        """The held-out error some evaluation report measured for this graph, or `ERROR_NOT_RECORDED`.
+
+        This package still scores nothing -- `provenance.quality` is `UNMEASURED` on every bundle it serves, and a
+        bundle arriving with any other value is refused. What this property returns was computed by
+        `M5PHET/evaluation` and copied into the manifest at export time together with the corpus seal, the protocol
+        digest, the row count and the digest of the report file, which is what makes it a quotation rather than a
+        claim. A reader who cannot see those conditions is being told a number, and a number on its own is what this
+        catalog exists not to publish.
+        """
+        declared = self.manifest.get("measured_error")
+        if declared is None or declared == ERROR_NOT_RECORDED:
+            return ERROR_NOT_RECORDED
+        return copy.deepcopy(declared)
+
+    @property
     def input_scale(self):
         return "train_standardized" if self.schema == SCHEMA_V1 else self.manifest["input_scale"]
 
@@ -351,6 +377,19 @@ class _Bundle:
                 raise ValueError(f"{self.path.name}: representation_spec must be the representation object the fit "
                                  f"recorded (carrying its own `schema`) or the string {REPRESENTATION_NOT_RECORDED!r}; "
                                  f"a bundle that records something unreadable is not served as if it recorded nothing")
+        declared = m.get("measured_error")
+        if declared is not None and declared != ERROR_NOT_RECORDED:
+            # A quoted number without the population it was measured on is exactly the thing this package refuses to
+            # publish, so the conditions are required fields and not decoration.
+            if not isinstance(declared, dict):
+                raise ValueError(f"{self.path.name}: measured_error must be the evaluation report's own metric block "
+                                 f"or the string {ERROR_NOT_RECORDED!r}")
+            missing = [k for k in MEASURED_ERROR_REQUIRED if not declared.get(k)]
+            if missing:
+                raise ValueError(f"{self.path.name}: measured_error is missing {', '.join(missing)}; an error quoted "
+                                 f"without the population it was measured on is not served")
+            if not isinstance(declared.get("values"), dict) or not declared["values"]:
+                raise ValueError(f"{self.path.name}: measured_error.values must carry the report's own metric values")
         for key in ("aliases", "horizon_aliases"):
             declared = m.get(key) or {}
             if not isinstance(declared, dict):
@@ -769,7 +808,10 @@ class ForecastProvider:
                                  # confidence level is a fitted pair and which will be refused by name
                                  quantiles=bundle.quantiles,
                                  fitted_confidence_levels=sorted(bundle.fitted_levels()),
-                                 representation_spec=bundle.representation_spec)
+                                 representation_spec=bundle.representation_spec,
+                                 # WP27: the held-out error some evaluation report measured for this bundle, with its
+                                 # seal and its protocol, or the constant that says the bundle quotes none
+                                 measured_error=bundle.measured_error)
                             for bundle in self._bundles]}
 
     def load(self, state_ref):
@@ -1159,9 +1201,20 @@ class ForecastProvider:
                                              for b in self._bundles for h in b.horizons))
             target, horizon = match[1], int(match[2])
         # the fitted state the config names is a DECLARED choice of engine, and it settles an ambiguity before the
-        # head rule has to: the workbench fills it from the example the person chose
+        # head rule has to: the workbench fills it from the example the person chose. Below it sits the `bundle` slot
+        # this provider declares, which is how a SENTENCE names an engine -- the slot existed and its value was never
+        # read here, so "forecast X with <state_id>" resolved the slot and then ignored it. The ladder is the declared
+        # one: the state first, the named bundle second, the kind of answer last.
+        #
+        # A blank value is not a name. The workbench's own defaults carry `state: ""`, and an optional slot the
+        # interpreter did not fill comes back empty; both mean "nothing was declared" and must fall through to the next
+        # rung, not be refused as a bundle called "".
         declared_state = config.get("state") if isinstance(config, dict) else None
-        bundle = self._resolve(target, horizon, named=declared_state if isinstance(declared_state, str) else None)
+        named = declared_state.strip() if isinstance(declared_state, str) and declared_state.strip() else None
+        if named is None and parameters:
+            slot = parameters.get("bundle")
+            named = slot.strip() if isinstance(slot, str) and slot.strip() else None
+        bundle = self._resolve(target, horizon, named=named)
         return self._request_for(bundle, prompt, data, config, target=target, horizon=horizon)
 
     def _request_for(self, bundle, prompt, data, config, *, target=None, horizon=None):
@@ -1183,11 +1236,17 @@ class ForecastProvider:
         if (config["provider"] != self.name or config["family"] != bundle.combination["family"]
                 or config["output_kind"] != bundle.combination["output_kind"] or config.get("input", "json") != "json"):
             raise ValueError("chat config must select this point-forecast provider with JSON input")
-        if config["state"] != bundle.state_ref:
+        declared_state = config["state"] if isinstance(config["state"], str) else None
+        if declared_state is not None and declared_state.strip() and declared_state != bundle.state_ref:
             # The words chose one fitted state and the config named another. Neither silently wins: a request answered by
             # a model the caller did not name is exactly what the ambiguity rule above exists to prevent.
             raise ValueError(f"the request names fitted state {config['state']!r}, but {target!r} at horizon "
                              f"{horizon!r} belongs to {bundle.state_ref!r}")
+        # A blank state is not a state that disagrees: it is the workbench's own default, and it means the caller
+        # declared no engine and let the ladder resolve one. The request then carries the state that WAS resolved, so
+        # the answer still names the engine that produced it -- what must never happen is the request travelling with
+        # an empty `fitted_state_ref`, which would make the answer unattributable.
+        resolved_state = bundle.state_ref
         parameters = config["parameters"]
         if not isinstance(parameters, dict) or set(parameters) - {"request_id"}:
             raise ValueError("parameters only supports optional request_id; no implicit model settings")
@@ -1197,7 +1256,7 @@ class ForecastProvider:
         data = self._window(data, bundle)
         request_id = parameters.get("request_id", "forecast:" + digest({"prompt": prompt, "data": data, "config": config}))
         request = {"schema_version": "m5phet.task.draft2", "request_id": request_id,
-                   "as_of": config["as_of"], "fitted_state_ref": config["state"],
+                   "as_of": config["as_of"], "fitted_state_ref": resolved_state,
                    **bundle.combination, "task_id": bundle.manifest["task_id"], "provider_ref": self.name,
                    "output_schema": bundle.output_schema(), "data": copy.deepcopy(data),
                    "population": {"input_sha256": digest(data)},
@@ -1230,6 +1289,8 @@ class ForecastProvider:
                              # which representation produced the engine behind this example, or the constant that says
                              # the bundle does not record one
                              "representation_spec": bundle.representation_spec,
+                             # and what it measured on the population that seal names, or ERROR_NOT_RECORDED
+                             "measured_error": bundle.measured_error,
                              "heads": bundle.heads,
                              "reading": (f"{family}: the answer is a {unit}, not a level; output_kind "
                                          f"{bundle.combination['output_kind']} names the payload shape only")
