@@ -987,6 +987,18 @@ class ForecastProvider:
                                              for b in self._bundles for h in b.horizons))
             target, horizon = match[1], int(match[2])
         bundle = self._resolve(target, horizon)
+        return self._request_for(bundle, prompt, data, config, target=target, horizon=horizon)
+
+    def _request_for(self, bundle, prompt, data, config, *, target=None, horizon=None):
+        """Build and check the request for a bundle ALREADY resolved, with every check `chat_request` makes after it.
+
+        The envelope path resolves its bundle in `_resolve_question` -- which honours a `state_ref` the caller named and
+        refuses a target two bundles share with STATE_REQUIRED -- and then has to build a request for exactly that
+        bundle. Routing it back through `chat_request` would resolve it a SECOND time, by target and horizon alone, and
+        the two rules disagree the moment a target has two bundles: the caller names the fitted state, `chat_request`
+        refuses the ambiguity anyway, and the refusal's own instruction ("name the fitted state") cannot be followed.
+        So the resolution happens once, here it is only used. `chat_request` keeps its own rule unchanged for the
+        callers that arrive with words instead of a state."""
         required = {"provider", "family", "output_kind", "state", "as_of", "parameters"}
         # Shared workbench fields are not forecasting model parameters.
         transport = {"input", "presentation", "context", "asset", "language", "max_age_seconds", "options"}
@@ -1137,8 +1149,8 @@ class ForecastProvider:
         config = {"input": "json", "provider": self.name, "family": bundle.combination["family"],
                   "output_kind": bundle.combination["output_kind"], "state": bundle.state_ref,
                   "as_of": as_of or datetime.now(timezone.utc).isoformat(), "parameters": {}}
-        request = self.chat_request(f"forecast {bundle.targets[0]} at {question['horizon']} steps", data, config,
-                                    parameters={"target": bundle.targets[0], "horizon": question["horizon"]})
+        request = self._request_for(bundle, f"forecast {bundle.targets[0]} at {question['horizon']} steps",
+                                     data, config, target=bundle.targets[0], horizon=question["horizon"])
         result = self.infer(request, self.load(bundle.state_ref))
         answer = result["outputs"][bundle.targets[0]]
         return answer["payload"], request, answer["uncertainty"]

@@ -192,3 +192,64 @@ def test_the_real_quantile_bundle_takes_raw_rows_like_every_other_bundle(quantil
                                        {"i": {"type": "interval", "horizon": 60, "confidence_level": 0.9}},
                                        rows, "2026-09-25T00:00:00+00:00")["i"]
     assert answer["type"] == "interval" and answer["values"][0][0] < answer["values"][0][1]
+
+
+# ------------------------------------------------------------------ two bundles for one target, one of them named
+
+
+@pytest.fixture
+def two_household_bundles():
+    """The real point bundle and the real quantile bundle in ONE directory: the situation WP07 creates."""
+    point = os.environ.get("M5PHET_FORECAST_BUNDLE")
+    quantile = os.environ.get("M5PHET_FORECAST_QUANTILE_BUNDLE")
+    if not point or not quantile:
+        pytest.skip("requires both the configured bundle directory and the WP07 quantile bundle")
+    root = Path(point)
+    household = root / "household-dev"
+    if not (household / "manifest.json").is_file():
+        pytest.skip("requires the retained household point bundle beside the quantile one")
+    return household, Path(quantile)
+
+
+def test_a_target_two_bundles_serve_is_answered_when_the_state_is_named(tmp_path, two_household_bundles):
+    """The refusal says 'name the fitted state instead of letting this pick one'. Naming it must therefore work."""
+    import shutil
+
+    household, quantile = two_household_bundles
+    directory = tmp_path / "both"
+    directory.mkdir()
+    shutil.copytree(household, directory / "household-dev")
+    shutil.copytree(quantile, directory / "quantile-household-dev")
+    provider = ForecastProvider(directory)
+    ref = next(r for r in provider.known_states() if r.startswith("quantile-household-dev"))
+    data = json.loads((quantile / "example_request.json").read_text())["data"]
+
+    # the target alone is genuinely ambiguous, and stays refused
+    ambiguous = provider.answer_questions({"target_variable": "Global_active_power"},
+                                          {"i": {"type": "interval", "horizon": 60, "confidence_level": 0.9}},
+                                          data, "2026-09-25T00:00:00+00:00")["i"]
+    assert ambiguous["status"] == "REFUSED" and "more than one configured bundle" in ambiguous["why"]
+
+    # naming the fitted state settles it, and the interval is answered by that bundle
+    answered = provider.answer_questions({"state_ref": ref},
+                                         {"i": {"type": "interval", "horizon": 60, "confidence_level": 0.9}},
+                                         data, "2026-09-25T00:00:00+00:00")["i"]
+    assert answered["type"] == "interval" and answered["state_ref"] == ref
+    assert answered["values"][0][0] < answered["values"][0][1]
+
+
+def test_a_named_state_does_not_widen_what_it_answers(tmp_path, two_household_bundles):
+    """Naming the state settles WHICH bundle answers; it never makes a bundle answer a question it was not fitted for."""
+    household, quantile = two_household_bundles
+    provider = ForecastProvider(quantile)
+    ref = provider.known_states()[0]
+    data = json.loads((quantile / "example_request.json").read_text())["data"]
+    for question, refusal in (({"type": "interval", "horizon": 30, "confidence_level": 0.9}, "not trained for"),
+                              ({"type": "point_forecast", "horizon": 1}, "not trained for")):
+        answer = provider.answer_questions({"state_ref": ref}, {"q": question}, data,
+                                           "2026-09-25T00:00:00+00:00")["q"]
+        assert answer["status"] == "REFUSED" and refusal in answer["why"]
+    wrong_target = provider.answer_questions({"state_ref": ref, "target_variable": "Voltage"},
+                                             {"q": {"type": "point_forecast", "horizon": 60}}, data,
+                                             "2026-09-25T00:00:00+00:00")["q"]
+    assert wrong_target["status"] == "REFUSED" and "not 'Voltage'" in wrong_target["why"]
