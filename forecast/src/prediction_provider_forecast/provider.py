@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import csv
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import math
 import os
@@ -339,6 +341,227 @@ class _Bundle:
                 raise ValueError(f"native artifact hash mismatch: {name}")
 
 
+#: how a refusal of the RAW-ROW adapter is named. These are not envelope refusal codes: they are statements about the
+#: rows a person attached, and each one says the single thing that is wrong with them. A caller used to have to
+#: standardize its own window with the bundle's statistics -- which meant a person with a CSV could not use the engine at
+#: all, and a person who standardized it with the WRONG statistics got a confident number from the wrong scale with no
+#: way to tell. The adapter below removes both, and every way it can fail is named here rather than described in prose.
+MISSING_COLUMNS = "MISSING_COLUMNS"
+TOO_FEW_ROWS = "TOO_FEW_ROWS"
+IRREGULAR_SAMPLING = "IRREGULAR_SAMPLING"
+NON_NUMERIC = "NON_NUMERIC"
+MALFORMED_ROWS = "MALFORMED_ROWS"
+#: the bundle's scaler bytes no longer hash to the digest the bundle declares. Checked when the rows are adapted, not
+#: only when the provider was constructed: a manifest can change on disk afterwards, and standardising with statistics
+#: the published digest does not describe would still produce an answer -- in the wrong scale, with nothing to show it.
+SCALER_DIGEST_MISMATCH = "SCALER_DIGEST_MISMATCH"
+#: the bundle declares a scaler but not the per-column statistics needed to standardise raw rows. Such a bundle can
+#: still serve an already-standardized window; it simply cannot be handed a CSV, and says so instead of guessing.
+SCALER_NOT_EXPORTED = "SCALER_NOT_EXPORTED"
+
+#: the exact key set of an already-standardized history window, as `_check_request` has always required it.
+WINDOW_KEYS = {"columns", "values", "scale", "scaler_digest"}
+
+#: a column that is not one of the fitted inputs but whose name says it carries the clock. Only used to CHECK the
+#: sampling step; it is never an input and never reaches the graph.
+TIMESTAMP_HINTS = ("time", "date", "stamp", "fecha", "hora")
+
+#: the spellings of an instant this adapter can read. A timestamp it cannot parse is not treated as irregular -- an
+#: unreadable clock is not evidence of a broken one -- so the step check is simply not made, and the rows are adapted
+#: on the caller's word that they are consecutive.
+TIMESTAMP_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S",
+                     "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M:%S",
+                     "%d-%m-%Y %H:%M:%S", "%d.%m.%Y %H:%M:%S")
+
+
+class RowAdapterRefusal(ValueError):
+    """A refusal of the raw rows, by name. A `ValueError`, so every caller that already treats a bad window as a
+    `ValueError` keeps behaving exactly as it did; `code` is there for the ones that want the name."""
+
+    def __init__(self, code, why):
+        super().__init__(f"{code}: {why}")
+        self.code = code
+        self.why = why
+
+
+def rows_from_csv(text):
+    """CSV text to a list of row objects, on the same rules the workbench's own reader uses."""
+    if not isinstance(text, str) or not text.strip():
+        raise RowAdapterRefusal(MALFORMED_ROWS, "the attached CSV is empty")
+    reader = csv.DictReader(io.StringIO(text.lstrip("\ufeff")))
+    fields = reader.fieldnames
+    if not fields or len(fields) != len(set(fields)) or any(not f.strip() for f in fields):
+        raise RowAdapterRefusal(MALFORMED_ROWS, "a CSV needs unique, nonempty column names")
+    rows = list(reader)
+    if not rows:
+        raise RowAdapterRefusal(MALFORMED_ROWS, "the attached CSV has a header and no rows")
+    if any(None in row or None in row.values() for row in rows):
+        raise RowAdapterRefusal(MALFORMED_ROWS, "a CSV row is wider or narrower than its header")
+    return rows
+
+
+def _as_bundle(bundle):
+    if isinstance(bundle, _Bundle):
+        return bundle
+    if isinstance(bundle, (str, Path)):
+        return _Bundle(bundle)
+    raise ValueError("window_from_rows needs an exported bundle or the path of one")
+
+
+def _scaler_statistics(bundle):
+    """The bundle's OWN per-column mean and standard deviation, read back out of its files and digest-checked.
+
+    Two exported shapes exist and both are honoured: the v1 household manifest carries `mean`/`sd` as lists aligned with
+    `columns`; a v2 manifest exported from predictor carries `columns: {name: {mean, std}}`. Nothing else is accepted --
+    a scaler this package cannot read is refused, never approximated."""
+    path = bundle.path / "manifest.json"
+    try:
+        manifest = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise RowAdapterRefusal(SCALER_DIGEST_MISMATCH,
+                                f"the bundle's manifest could not be read back from disk: {exc}") from exc
+    scaler, declared = manifest.get("scaler"), manifest.get("scaler_digest")
+    if not isinstance(scaler, dict) or declared != bundle.manifest["scaler_digest"]:
+        raise RowAdapterRefusal(SCALER_DIGEST_MISMATCH,
+                                f"{bundle.path.name} no longer declares the scaler digest this provider loaded "
+                                f"({bundle.manifest['scaler_digest']}); instantiate a new provider for a new state")
+    try:
+        actual = digest(scaler)
+    except (TypeError, ValueError) as exc:
+        raise RowAdapterRefusal(SCALER_DIGEST_MISMATCH, f"the scaler cannot be hashed: {exc}") from exc
+    if actual != declared:
+        raise RowAdapterRefusal(SCALER_DIGEST_MISMATCH,
+                                f"the scaler in {bundle.path.name} hashes to {actual}, not to the declared {declared}; "
+                                f"rows will not be standardised with statistics the bundle does not vouch for")
+    columns = list(bundle.manifest["columns"])
+    if isinstance(scaler.get("mean"), list) and isinstance(scaler.get("sd"), list):
+        mean, sd = list(scaler["mean"]), list(scaler["sd"])
+    elif isinstance(scaler.get("columns"), dict):
+        per = scaler["columns"]
+        absent = [c for c in columns if not isinstance(per.get(c), dict)]
+        if absent:
+            raise RowAdapterRefusal(SCALER_NOT_EXPORTED,
+                                    f"the bundle's scaler has no statistics for {', '.join(absent)}, so raw rows "
+                                    f"cannot be standardised; attach an already-standardized window instead")
+        mean = [per[c].get("mean") for c in columns]
+        sd = [per[c].get("std", per[c].get("sd")) for c in columns]
+    else:
+        raise RowAdapterRefusal(SCALER_NOT_EXPORTED,
+                                f"{bundle.path.name} declares a scaler digest but not the per-column statistics raw "
+                                f"rows would be standardised with; attach an already-standardized window instead")
+    if len(mean) != len(columns) or len(sd) != len(columns):
+        raise RowAdapterRefusal(SCALER_NOT_EXPORTED,
+                                f"the bundle's scaler describes {len(mean)} channels and the graph takes "
+                                f"{len(columns)}; raw rows cannot be standardised against it")
+    if any(type(v) not in (int, float) or not math.isfinite(v) for v in list(mean) + list(sd)) or any(s <= 0 for s in sd):
+        raise RowAdapterRefusal(SCALER_NOT_EXPORTED,
+                                "the bundle's scaler statistics are not finite per-column numbers with a positive "
+                                "spread; raw rows cannot be standardised against it")
+    return np.asarray(mean, dtype=np.float64), np.asarray(sd, dtype=np.float64), declared
+
+
+def _instant(value):
+    """Epoch seconds for one timestamp cell, or None when this adapter cannot read it."""
+    if type(value) in (int, float) and math.isfinite(value):
+        return float(value)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        parsed = None
+        for shape in TIMESTAMP_FORMATS:
+            try:
+                parsed = datetime.strptime(text, shape)
+                break
+            except ValueError:
+                continue
+    if parsed is None:
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _check_sampling(rows, bundle):
+    """If the rows carry a clock, it must be the bundle's own grid. A model trained on one-minute bars answers a
+    one-minute question; handed hourly rows it would answer confidently about a window it never saw."""
+    fitted = set(bundle.manifest["columns"])
+    named = next((key for key in rows[0] if key not in fitted
+                  and any(hint in str(key).lower() for hint in TIMESTAMP_HINTS)), None)
+    if named is None:
+        return
+    instants = [_instant(row.get(named)) for row in rows]
+    if any(t is None for t in instants):
+        return
+    step = int(bundle.manifest["step_seconds"])
+    for i in range(1, len(instants)):
+        observed = instants[i] - instants[i - 1]
+        if observed != step:
+            raise RowAdapterRefusal(IRREGULAR_SAMPLING,
+                                    f"column {named!r} steps by {observed:g} s between rows {i - 1} and {i} of the "
+                                    f"window, and this bundle is fitted on a grid of {step} s")
+
+
+def _number(value, column, row_index):
+    if type(value) in (int, float) and math.isfinite(value):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            parsed = float(value.strip())
+        except ValueError:
+            parsed = None
+        if parsed is not None and math.isfinite(parsed):
+            return parsed
+    raise RowAdapterRefusal(NON_NUMERIC, f"column {column!r} carries {value!r} at row {row_index} of the window; "
+                                         f"every fitted input must be a finite number")
+
+
+def window_from_rows(rows, bundle):
+    """Raw rows in, the engine's window out: exactly the object `_check_request` already accepts.
+
+    `rows` is CSV text or a list of row objects in chronological order, in ORIGINAL units, with whatever extra columns
+    the file happens to have. The fitted inputs are selected BY NAME (a file's column order is its own business), the
+    last `window` of them are taken, and they are standardised with the bundle's own digest-checked statistics in
+    float64 before being narrowed to the float32 the graph consumes -- which is the arithmetic `export.py` used, so the
+    window this rebuilds from the source rows is the window the bundle ships.
+
+    Every way this can fail is refused by name and none of them is answered."""
+    bundle = _as_bundle(bundle)
+    if isinstance(rows, str):
+        rows = rows_from_csv(rows)
+    if isinstance(rows, dict):
+        rows = [rows]
+    if not isinstance(rows, list) or not rows or any(not isinstance(row, dict) for row in rows):
+        raise RowAdapterRefusal(MALFORMED_ROWS, "raw history must be CSV text or a nonempty list of row objects")
+    mean, sd, scaler_digest = _scaler_statistics(bundle)
+    columns = list(bundle.manifest["columns"])
+    missing = [c for c in columns if any(c not in row for row in rows)]
+    if missing:
+        raise RowAdapterRefusal(MISSING_COLUMNS,
+                                f"the rows do not carry {', '.join(missing)}; this bundle is fitted on "
+                                f"{', '.join(columns)}")
+    window = int(bundle.manifest["window"])
+    if len(rows) < window:
+        raise RowAdapterRefusal(TOO_FEW_ROWS,
+                                f"{len(rows)} rows were given and this bundle needs {window}: a window of {window} "
+                                f"consecutive rows ending at the origin")
+    tail = rows[-window:]
+    _check_sampling(tail, bundle)
+    raw = np.asarray([[_number(row[name], name, i) for name in columns] for i, row in enumerate(tail)],
+                     dtype=np.float64)
+    values = ((raw - mean) / sd).astype(np.float32).tolist()
+    return {"columns": columns, "values": values, "scale": bundle.input_scale, "scaler_digest": scaler_digest}
+
+
+def _standardized_window(value):
+    return isinstance(value, dict) and set(value) == WINDOW_KEYS
+
+
 def _refusal(kind, why, question_type):
     """The envelope's refusal shape, byte for byte what `m5phet.questions.refusal` builds."""
     return {"status": "REFUSED", "refusal": kind, "why": why, "type": question_type}
@@ -600,6 +823,38 @@ class ForecastProvider:
                              f"{self._available()}")
         return matches[0]
 
+    @staticmethod
+    def _window(data, bundle):
+        """The standardized window this request will carry, from whatever the caller attached.
+
+        An already-standardized window (or a list holding exactly one, which is how the workbench attaches a JSON file)
+        is returned UNCHANGED -- not rebuilt, not re-hashed -- so a caller that was working keeps working byte for byte.
+        Raw rows go through `window_from_rows`. Anything else is handed on untouched, to be refused by the request check
+        that has always refused it, with the message it has always used."""
+        if _standardized_window(data):
+            return data
+        if isinstance(data, list) and len(data) == 1 and _standardized_window(data[0]):
+            return data[0]
+        if isinstance(data, str) or (isinstance(data, list) and data and all(isinstance(r, dict) for r in data)):
+            return window_from_rows(data, bundle)
+        return data
+
+    def window_from_rows(self, rows, state_ref=None):
+        """The standardized window one configured bundle would consume, from raw rows. No graph is loaded.
+
+        With several bundles configured the caller names which one: the fitted columns, the window length and the
+        statistics are that bundle's, and standardising rows against the wrong bundle would produce a window that looks
+        perfectly valid and means nothing."""
+        if not self._bundles:
+            raise ValueError("no trained DEV bundle configured")
+        if state_ref is None:
+            if len(self._bundles) != 1:
+                raise ValueError("name the fitted state: " + ", ".join(self.known_states()))
+            bundle = self._bundles[0]
+        else:
+            bundle = self._bundle(state_ref)
+        return window_from_rows(rows, bundle)
+
     def chat_request(self, prompt, data, config, parameters=None):
         if not self._bundles:
             raise ValueError("no trained DEV bundle configured")
@@ -638,6 +893,10 @@ class ForecastProvider:
         parameters = config["parameters"]
         if not isinstance(parameters, dict) or set(parameters) - {"request_id"}:
             raise ValueError("parameters only supports optional request_id; no implicit model settings")
+        # WP16: raw rows (CSV text, or the row objects the workbench's CSV reader produces) are standardised HERE, with
+        # the bundle this request already resolved. An already-standardized window is passed through untouched, so the
+        # path that existed before this adapter is byte for byte the path it was.
+        data = self._window(data, bundle)
         request_id = parameters.get("request_id", "forecast:" + digest({"prompt": prompt, "data": data, "config": config}))
         request = {"schema_version": "m5phet.task.draft2", "request_id": request_id,
                    "as_of": config["as_of"], "fitted_state_ref": config["state"],
@@ -693,8 +952,11 @@ class ForecastProvider:
         framework asks this first and refuses the envelope by name, saying what to attach."""
         return {"required": True,
                 "why": "a forecast is made from the caller's own window of observations; this provider holds none",
-                "shape": "a JSON object with exactly columns, values, scale and scaler_digest, standardized with the "
-                         "bundle's own scaler (the catalog example carries one that runs)"}
+                "shape": "either raw rows in the series' own units -- a CSV or a list of row objects carrying the "
+                         "fitted input columns by name, at the bundle's own sampling step, at least `window` of them "
+                         "(the last ones are used and the bundle's own scaler is applied here) -- or an "
+                         "already-standardized window: a JSON object with exactly columns, values, scale and "
+                         "scaler_digest (the catalog example carries one that runs)"}
 
     def question_types(self):
         """The types a caller may ask this area, with the fields each takes.
@@ -757,7 +1019,7 @@ class ForecastProvider:
     def _point_forecast(self, bundle, question, data, as_of):
         """The real engine, on the same path the workbench takes: `chat_request` builds and checks the request, `load`
         verifies the artifact, `infer` runs the native graph. Nothing about the number is computed here."""
-        if isinstance(data, list) and len(data) == 1:
+        if isinstance(data, list) and len(data) == 1 and _standardized_window(data[0]):
             data = data[0]                                 # the workbench attaches a list of one history window
         config = {"input": "json", "provider": self.name, "family": bundle.combination["family"],
                   "output_kind": bundle.combination["output_kind"], "state": bundle.state_ref,
@@ -791,6 +1053,11 @@ class ForecastProvider:
             else:
                 try:
                     answers[name] = self._point_forecast(bundle, question, data, as_of)
+                except RowAdapterRefusal as exc:
+                    # the rows themselves are what is wrong, and the refusal already says which way: keep that name
+                    # rather than burying it under the exception class the envelope does not know about
+                    answers[name] = _refusal(PROVIDER_ERROR, str(exc), kind)
+                    continue
                 except (ValueError, RuntimeError) as exc:
                     answers[name] = _refusal(PROVIDER_ERROR, f"{type(exc).__name__}: {exc}", kind)
                     continue

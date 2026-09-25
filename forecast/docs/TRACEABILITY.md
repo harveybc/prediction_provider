@@ -120,3 +120,56 @@ target the bundle does have.
 DEV results still do not establish calibration, benchmark success, governance
 acceptance or production eligibility, for either bundle. The direction bundle in
 particular carries no exposure receipt and no measured quality of any kind.
+
+## Raw Rows In, the Engine's Window Out (WP16, 2026-09-25)
+
+Until this change a caller had to hand the provider a window that was ALREADY
+standardized with the bundle's scaler, carrying the bundle's `scaler_digest`. A
+person holding a CSV could not use the engine at all, and a person who
+standardized it themselves with the wrong statistics got a confident number in
+the wrong scale with nothing to show it. `window_from_rows(rows, bundle)` closes
+both.
+
+- **The scaler is the bundle's own, re-read from the bundle's files at call
+  time.** Both exported shapes are honoured: the v1 household manifest's
+  `mean`/`sd` lists aligned with `columns`, and a v2 manifest's
+  `scaler.columns{name: {mean, std}}`. The bytes are hashed again and compared to
+  the declared `scaler_digest` on every adaptation, not only when the provider
+  was constructed — a manifest can change on disk afterwards, and the engine
+  would still answer. `SCALER_DIGEST_MISMATCH` refuses that. A bundle that ships
+  a digest but no per-column statistics is refused `SCALER_NOT_EXPORTED`; it can
+  still serve an already-standardized window, and it is never given an invented
+  scaler.
+- **Columns are selected by name**, so the file's own column order and its extra
+  columns are its own business. `MISSING_COLUMNS` names the ones that are absent.
+- **The last `window` rows are used**; everything before them is history.
+  `TOO_FEW_ROWS` names n against the window.
+- **A clock is checked when the rows carry one.** A non-fitted column whose name
+  says it is a timestamp is parsed, and a step that is not the bundle's
+  `step_seconds` is refused `IRREGULAR_SAMPLING`. A timestamp this adapter cannot
+  parse is NOT treated as irregular — an unreadable clock is not evidence of a
+  broken one — so the check is simply not made and the refusal is never invented.
+- **`NON_NUMERIC` names the column and the first bad value**; a bool is not a
+  number.
+- **Arithmetic is `export.py`'s arithmetic**: standardise in float64, narrow to
+  float32. That is what makes the parity exact rather than approximate.
+
+Parity (`tests/test_window_from_rows.py`): the shipped
+`example_request.json` window rebuilt from the ORIGINAL-UNIT rows of the same DEV
+slice (rows 0..59, the origin the manifest's provenance records) is equal to the
+shipped window with max absolute error **0.0**, and the whole `data` object
+hashes to the same `input_sha256` (`a4a4598b…`). The native graph then answers
+`0.5412255525588989 kW`, the number this bundle has always answered.
+
+The already-standardized path is untouched: `chat_request` passes such an object
+through unchanged — not rebuilt, not re-hashed — and the test asserts the built
+request equals the shipped `example_request.json` in full.
+
+The parity test needs the owner's DEV slice in original units and SKIPS without
+it (`M5PHET_FORECAST_TEST_ROWS`). No rows are committed and none are synthesized:
+a fabricated slice would prove that the arithmetic is its own inverse and nothing
+about the bundle.
+
+Verification outcome: **106 passed, 3 skipped** (from 91 passed, 3 skipped) with
+the retained household bundle and the DEV slice configured; 101 passed, 8 skipped
+without the slice. The three standing skips are unchanged.

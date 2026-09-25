@@ -136,5 +136,54 @@
     },
     "predictor_repository_written_to": false,
     "reviewer": "implementation agent; no independent review claimed"
+  },
+  "raw_row_adapter_wp16_2026_09_25": {
+    "function": "prediction_provider_forecast.window_from_rows(rows, bundle)",
+    "scaler_source": "the bundle's own manifest.json, re-read and re-hashed at call time against the declared scaler_digest",
+    "scaler_shapes_supported": [
+      "v1 mean/sd lists aligned with columns",
+      "v2 scaler.columns{name:{mean,std}}"
+    ],
+    "refusals": [
+      "MISSING_COLUMNS",
+      "TOO_FEW_ROWS",
+      "IRREGULAR_SAMPLING",
+      "NON_NUMERIC",
+      "SCALER_DIGEST_MISMATCH",
+      "SCALER_NOT_EXPORTED",
+      "MALFORMED_ROWS"
+    ],
+    "parity": {
+      "population": "household DEV slice rows 0..59 in original units (the origin recorded in manifest provenance)",
+      "max_absolute_error_against_shipped_window": 0.0,
+      "tolerance_required": 1e-09,
+      "rebuilt_input_sha256": "a4a4598bce72d3723055300d84d797df4ea18e28bdf5f0689315d06061f75ffb",
+      "native_value_from_rebuilt_window": 0.5412255525588989,
+      "standardized_window_path": "byte-identical; chat_request passes an already-standardized window through unchanged"
+    },
+    "suite": {
+      "passed": 106,
+      "skipped": 3,
+      "note": "with M5PHET_FORECAST_TEST_ROWS set to the owner's DEV slice; 101 passed / 8 skipped without it, because the parity fixture is the owner's data and is neither committed nor synthesized"
+    },
+    "end_to_end_http": {
+      "surface": "m5phet workbench on 127.0.0.1:8766, raw .csv attached through POST /api/chats/{cid}/files",
+      "sentence": "¿cuánta potencia habrá en la próxima hora?",
+      "first_60_raw_rows": {
+        "value_kW": 0.5412255525588989,
+        "population_sha256": "9cb7796fd2620aa2474964070a9a7047407debf29f396bf7b479badbd4614c37",
+        "note": "sha256 of {\"input_sha256\":\"a4a4598b…\"}, i.e. the shipped example window"
+      },
+      "last_600_raw_rows": {
+        "value_kW": 1.5093739032745361,
+        "note": "a DIFFERENT 60-row window (slice rows 50340..50399), so a different forecast; nothing was adjusted to make it match"
+      },
+      "execution_authorized": false
+    },
+    "harnesses": {
+      "verify_families": "examples 8/8, prose 14/14, refusals 2/2, any_execution_authorized false",
+      "verify_envelopes": "questions 15/15, any_execution_authorized false"
+    },
+    "not_measured": "this adapter changes how rows reach the graph; it establishes no calibration, benchmark, governance acceptance or production eligibility, and measures no quality"
   }
 }
