@@ -172,3 +172,23 @@ def test_ambiguous_chat_rejected(ready, prompt):
     p, req = ready
     with pytest.raises(ValueError):
         p.chat_request(prompt, req["data"], chat_config(req))
+
+
+def test_an_example_says_what_its_number_is_apart_from_the_payload_shape(ready):
+    """Retsu (2026-09-24, §8.5): the direction example said `output_kind: point_forecast` while the bundle's unit is a
+    probability; both true, and they trod on each other. Every example now names unit and family beside the kind."""
+    import os
+    from pathlib import Path
+    p, _ = ready
+    example = p.chat_examples()[0]
+    assert example["config"]["output_kind"] == "point_forecast"
+    assert example["unit"] == "kW" and example["family"] and "level in kW" in example["reading"]
+    configured = os.environ.get("M5PHET_FORECAST_BUNDLE")
+    if not configured or not Path(configured).is_dir():
+        pytest.skip("the operator's bundle directory with the direction bundle is not configured here")
+    examples = ForecastProvider(Path(configured)).chat_examples()
+    direction = [e for e in examples if e["unit"] == "probability"]
+    assert direction, [e["title"] for e in examples]
+    for e in direction:
+        assert "probability" in e["prompt"] and "not a level" in e["reading"]
+        assert e["config"]["output_kind"] == "point_forecast" and e["family"] == "binary_classification"

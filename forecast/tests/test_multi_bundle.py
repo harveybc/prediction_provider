@@ -276,3 +276,4 @@ def test_the_real_bundle_answers_its_recorded_value_from_inside_a_directory(hous
     assert payload["unit"] == "kW" and payload["scale"] == "original"
     # the sibling is configured and enumerated, and it did not touch this answer
     assert any(ref.startswith("sibling:") for ref in p.known_states())
+

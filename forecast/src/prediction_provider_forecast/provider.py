@@ -662,8 +662,20 @@ class ForecastProvider:
                 continue
             request = json.loads(source.read_text())
             self._check_request(request)
+            # `output_kind` is the runtime's contract word (the shape of the payload); `unit` is what the number IS.
+            # The direction bundle answers a point_forecast whose unit is a probability, and the example must say
+            # both apart, or "forecast" reads as a level when it is a chance (Retsu, 2026-09-24, §8.5).
+            unit, family = bundle.manifest["unit"], bundle.combination["family"]
+            prompt = (f"what is the {bundle.targets[0]} probability at horizon {bundle.horizons[0]}?"
+                      if unit == "probability" else f"forecast {bundle.targets[0]} at {bundle.horizons[0]} steps")
             examples.append({"title": bundle.title,
-                             "prompt": f"forecast {bundle.targets[0]} at {bundle.horizons[0]} steps",
+                             "prompt": prompt,
+                             "reading": (f"{family}: the answer is a {unit}, not a level; output_kind "
+                                         f"{bundle.combination['output_kind']} names the payload shape only")
+                             if unit == "probability" else
+                             f"{family}: the answer is a level in {unit} ({bundle.manifest['scale']} scale)",
+                             "unit": unit,
+                             "family": family,
                              "data": request["data"],
                              "config": {"input": "json", "provider": self.name,
                                         "family": bundle.combination["family"],
