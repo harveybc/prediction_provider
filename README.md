@@ -1,14 +1,26 @@
 # Prediction Provider
 
-A plugin-based FastAPI service that serves financial time-series predictions
-over HTTP. It loads predictor plugins (Keras/ONNX model wrappers, ideal
+A plugin-based FastAPI service that serves financial time-series model inference
+over HTTP. It loads prediction and decision-model plugins (Keras/ONNX model wrappers, ideal
 oracles, CSV replay), feeds them through a configurable feeder → pipeline →
 predictor chain, and exposes prediction, health, info and metrics endpoints
 with multi-role authentication, billing/marketplace records and SQL
-persistence. It sits between the model-training repositories and the
-execution side of the stack.
+persistence. It connects the model-training repositories and the execution
+side of the stack.
 
 ## Status
+
+**Evaluation guide (2026-09-14):** [AGENTS.md](AGENTS.md) documents the setup,
+available plugins and bounded checks. The
+[research repository map](https://github.com/harveybc/predictor/blob/master/docs/RESEARCH_STACK.md)
+places this API downstream of model training. The
+[doctoral proposal](https://github.com/harveybc/predictor/blob/master/docs/propuesta_doctoral_representaciones_temporales_modulares.pdf)
+concerns learning representations, not a claim that every serving plugin
+implements that architecture.
+
+Use recorded inputs for an offline evaluation. Some feeder configurations can
+fetch external data; do not call the entire application offline by assumption.
+Ideal-oracle plugins are evaluation controls, not deployable predictors.
 
 **ACTIVE — core repository.** Package `prediction_provider` version
 **0.1.0** ([`setup.py`](setup.py)); nested package
@@ -30,7 +42,14 @@ with shell access:
 > paths where I can see the results and one query I should try first.
 
 `AGENTS.md` is the [agents.md](https://agents.md) convention, read natively by
-most coding agents.
+most coding agents. The standing rules for any agent reading this repository:
+
+> Inspect the installed model adapter and its input/output contract. Start a
+> separate local test service with fixtures, never replace a running endpoint.
+> Test one valid request and invalid-input behavior; report model/artifact
+> identities and response semantics. Do not describe an offline oracle as a
+> deployable predictor, or start a broker or training job to demonstrate the
+> serving API.
 
 ## Role and non-responsibilities
 
