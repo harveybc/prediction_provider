@@ -150,15 +150,34 @@ def test_a_target_only_one_bundle_has_resolves_to_that_bundle(two_bundles):
     assert p._engine is None
 
 
-def test_a_target_two_bundles_share_is_refused_with_both_named(overlapping_bundles):
+def test_a_target_two_bundles_share_is_answered_by_the_fitted_state_the_config_names(overlapping_bundles):
+    """The ambiguity is settled by what the request DECLARES, and `config["state"]` is a declaration.
+
+    It used to be refused even here (2026-09-24), which made a second bundle for one series unusable: the workbench
+    fills `state` from the example the person picked, so the caller had already said which engine they meant and was
+    told to say it. What must never happen is the OTHER thing -- picking one because it was enumerated first -- and the
+    test below covers that."""
     p = overlapping_bundles
     first, second = p.known_states()
-    with pytest.raises(ValueError) as refusal:
-        p.chat_request("which way is it going?", window_for(p, first), chat_config(p, first),
-                       parameters={"target": "direction_long", "horizon": 1})
-    # both are named: answering with the one that happens to be enumerated first would hide which model replied
-    assert first in str(refusal.value) and second in str(refusal.value)
+    for wanted in (first, second):
+        request = p.chat_request("which way is it going?", window_for(p, wanted), chat_config(p, wanted),
+                                 parameters={"target": "direction_long", "horizon": 1})
+        assert request["fitted_state_ref"] == wanted
     assert p._engine is None
+
+
+def test_a_shared_target_with_nothing_to_tell_them_apart_is_refused_with_both_named(overlapping_bundles):
+    """No `state_ref`, no `bundle`, and a kind both heads answer: nothing declared, so nothing is chosen."""
+    p = overlapping_bundles
+    first, second = p.known_states()
+    answers = p.answer_questions({"target_variable": "direction_long"},
+                                 {"q": {"type": "point_forecast", "horizon": 1}}, window_for(p, first), None)
+    refusal = answers["q"]
+    assert refusal["status"] == "REFUSED" and refusal["refusal"] == "STATE_REQUIRED"
+    assert first in refusal["why"] and second in refusal["why"]
+    # and the refusal says how to settle it, or it is an instruction nobody can follow
+    assert "bundle" in refusal["why"] and "interval" in refusal["why"]
+    assert answers["__state_ref__"] is None and p._engine is None
 
 
 def test_the_shared_target_is_still_declared_so_the_refusal_is_about_the_question(overlapping_bundles):

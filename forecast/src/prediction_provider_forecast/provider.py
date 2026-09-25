@@ -45,6 +45,11 @@ READOUTS = ("target_scaler_inverse", "identity")
 #: arriving with any other value is refused rather than allowed to carry a number this package did not compute.
 UNMEASURED = "UNMEASURED"
 
+#: what a bundle exported before WP06 recorded representations says when asked which representation produced it. It is
+#: NOT a shrug: it is the difference between "this bundle does not say" and a plausible spec reconstructed by the
+#: server, which would look exactly like a recorded one and could name a window the graph was never fitted with.
+REPRESENTATION_NOT_RECORDED = "REPRESENTATION_NOT_RECORDED"
+
 #: what a bundle is allowed to say about held-out exposure. `DEV_ONLY_NO_TEST_ACCESS` is a RECEIPT: a governed run wrote
 #: it and the exporter checked it. predictor's committed example checkpoints have no such receipt, so they say so instead
 #: of borrowing the stronger wording -- a bundle that claims a receipt nobody wrote is worse than one that claims none.
@@ -224,6 +229,20 @@ class _Bundle:
         return levels
 
     @property
+    def representation_spec(self):
+        """The representation this graph was fitted from, or `REPRESENTATION_NOT_RECORDED`. Never a reconstruction.
+
+        WP06 makes the representation -- windows, lags, differencing, the calendar clock, the features by name -- an
+        explicit designed object, and the point of designing one is being able to say afterwards which one answered. A
+        bundle exported before that carries none, and the honest answer is the constant: this catalog will not infer a
+        spec from the manifest's window and columns, because the inference would be indistinguishable from a recorded
+        one and would state a lag structure nobody fitted."""
+        declared = self.manifest.get("representation_spec")
+        if declared is None or declared == REPRESENTATION_NOT_RECORDED:
+            return REPRESENTATION_NOT_RECORDED
+        return copy.deepcopy(declared)
+
+    @property
     def input_scale(self):
         return "train_standardized" if self.schema == SCHEMA_V1 else self.manifest["input_scale"]
 
@@ -326,6 +345,12 @@ class _Bundle:
         if m.get("readout") not in READOUTS:
             raise ValueError(f"{self.path.name}: readout must be one of {READOUTS}")
         self._validate_heads()
+        declared = m.get("representation_spec")
+        if declared is not None and declared != REPRESENTATION_NOT_RECORDED:
+            if not isinstance(declared, dict) or not _text(declared.get("schema")):
+                raise ValueError(f"{self.path.name}: representation_spec must be the representation object the fit "
+                                 f"recorded (carrying its own `schema`) or the string {REPRESENTATION_NOT_RECORDED!r}; "
+                                 f"a bundle that records something unreadable is not served as if it recorded nothing")
         for key in ("aliases", "horizon_aliases"):
             declared = m.get(key) or {}
             if not isinstance(declared, dict):
@@ -733,9 +758,18 @@ class ForecastProvider:
                 # With several bundles there is no single output schema; each fitted state declares its own, and a caller
                 # that reads only the singular field must see nothing rather than one bundle's contract standing in for all.
                 "output_schema": self._bundles[0].output_schema() if len(self._bundles) == 1 else None,
+                # `representation_spec` is what WP06 stage 3 made askable: which designed representation produced
+                # this bundle. A bundle that records none says REPRESENTATION_NOT_RECORDED here, and the catalog says
+                # that instead of a reconstruction, so a reader can tell the two apart.
                 "bundles": [dict(bundle.output_schema(), state_ref=bundle.state_ref,
                                  task_id=bundle.manifest["task_id"], family=bundle.combination["family"],
-                                 window=bundle.manifest["window"], step_seconds=bundle.manifest["step_seconds"])
+                                 window=bundle.manifest["window"], step_seconds=bundle.manifest["step_seconds"],
+                                 heads=bundle.heads, title=bundle.title,
+                                 # the levels this bundle can bound, so a caller can see BEFORE asking which
+                                 # confidence level is a fitted pair and which will be refused by name
+                                 quantiles=bundle.quantiles,
+                                 fitted_confidence_levels=sorted(bundle.fitted_levels()),
+                                 representation_spec=bundle.representation_spec)
                             for bundle in self._bundles]}
 
     def load(self, state_ref):
@@ -908,44 +942,182 @@ class ForecastProvider:
             for column in bundle.manifest.get("columns") or []:
                 if column not in targets and column not in untrained:
                     untrained.append(column)
-        return [{"name": "target", "allowed": targets, "aliases": aliases,
-                 "known_unsupported": untrained},
-                {"name": "horizon", "allowed": horizons, "type": "integer",
-                 "aliases": horizon_aliases,
-                 "number_hints": ["step", "horizon", "minute", "hour", "ahead", "paso", "minuto", "hora", "adelante"]}]
+        slots = [{"name": "target", "allowed": targets, "aliases": aliases,
+                  "known_unsupported": untrained},
+                 {"name": "horizon", "allowed": horizons, "type": "integer",
+                  "aliases": horizon_aliases,
+                  "number_hints": ["step", "horizon", "minute", "hour", "ahead", "paso", "minuto", "hora",
+                                   "adelante"]}]
+        # WP07: with several bundles serving one series, WHICH engine answers is a declared value like any other, so
+        # the words -- or Laya, resolving against exactly this list -- can settle it instead of the request being
+        # refused. The aliases are the ones that name one bundle and no other: its state_id, and the head only it has.
+        # Ambiguity is still refused; what this slot removes is the need to type a digest to avoid it.
+        if len(self._bundles) > 1:
+            allowed, bundle_aliases = [], {}
+            for bundle in self._bundles:
+                allowed.append(bundle.state_ref)
+                spoken = [name for name in self._names_of(bundle) if name != bundle.state_ref]
+                if "quantile" in spoken:
+                    spoken += ["interval", "rango", "intervalo", "con incertidumbre", "with an interval"]
+                if "point" in spoken:
+                    spoken += ["puntual", "point forecast", "pronostico puntual", "sin intervalo"]
+                bundle_aliases[bundle.state_ref] = _dedup(spoken)
+            slots.append({"name": "bundle", "allowed": allowed, "aliases": bundle_aliases,
+                          # OPTIONAL, and it must stay optional: the sentences people actually type name a series and a
+                          # horizon, and the engine is resolved from what the question asks for. A required slot here
+                          # would refuse every sentence that does not carry a fitted state's name.
+                          "required": False,
+                          "why": ("several configured bundles serve the same series; this names which fitted engine "
+                                  "answers. Leaving it out is allowed: an `interval` question resolves to the bundle "
+                                  "with a quantile head, and a `point_forecast` to the bundle without one when exactly "
+                                  "one has none")})
+        return slots
+
+    # ------------------------------------------------------------------ which bundle, when several serve one target
+
+    #: how a caller settles an ambiguity, quoted in every refusal that names one, so the refusal is actionable
+    HOW_TO_DISAMBIGUATE = ("name it: `bundle` in the question (its state_ref, its state_id, or its head -- `quantile` "
+                           "or `point`), or `state_ref` in the state; ask for an `interval`, which only a bundle with "
+                           "a quantile head can answer; or ask for a `point_forecast`, which prefers the bundle "
+                           "without a quantile head when exactly one has none")
+
+    def _names_of(self, bundle):
+        """Every word that names THIS bundle and no other: its state_ref, its state_id, and the head it has alone."""
+        state_id = bundle.state_ref.split(":", 1)[0]
+        names = [bundle.state_ref, state_id]
+        for head in bundle.heads:
+            if sum(1 for other in self._bundles if head in other.heads) == 1:
+                names.append(head)
+        if "quantile" not in bundle.heads and sum(1 for b in self._bundles if "quantile" not in b.heads) == 1:
+            names.append("point")
+        return _dedup(names)
+
+    def _named_bundle(self, holders, named):
+        """`(bundle, None)` when `named` picks exactly one of `holders`; `(None, why)` when it picks none or several."""
+        if not isinstance(named, str) or not named.strip():
+            return None, f"`bundle` must be a name, not {named!r}"
+        wanted = named.strip()
+        picked = [b for b in holders if wanted in self._names_of(b)]
+        if len(picked) == 1:
+            return picked[0], None
+        if not picked:
+            return None, (f"no configured bundle among {[b.state_ref for b in holders]} is named {wanted!r}; a bundle "
+                          f"is named by its state_ref, its state_id, or a head only it has")
+        return None, (f"{wanted!r} names {len(picked)} of the configured bundles "
+                      f"({', '.join(b.state_ref for b in picked)}); name the fitted state_ref instead")
+
+    def _by_head(self, holders, kind):
+        """The holder a question of this KIND declares, or `None` when the kind separates none of them.
+
+        Two rules, both declared rather than inferred: an `interval` can only be answered by a bundle with a quantile
+        head, so a single quantile holder settles it; and a `point_forecast` asked where exactly one holder has no
+        quantile head means that one -- the bundle whose whole output is the point. Where the rule leaves two, nothing
+        is picked: the caller is asked, and never served whichever was enumerated first."""
+        if kind == "interval":
+            with_quantiles = [b for b in holders if "quantile" in b.heads]
+            return with_quantiles[0] if len(with_quantiles) == 1 else None
+        if kind == "point_forecast":
+            without = [b for b in holders if "quantile" not in b.heads]
+            return without[0] if len(without) == 1 else None
+        return None
 
     def _available(self):
         return "; ".join(f"{b.targets[0]} at {b.horizons} ({b.state_ref})" for b in self._bundles)
 
-    def _resolve(self, target, horizon):
-        """Exactly one bundle, or a refusal that names the alternatives.
+    def _resolve(self, target, horizon, *, named=None, kind="point_forecast"):
+        """Exactly one bundle, or a refusal that names the alternatives and how to tell them apart.
 
-        Two configured bundles may honestly serve the same target at the same horizon -- two architectures, two regimes,
-        two training windows. Answering with whichever one was enumerated first would put a model nobody chose behind a
-        confident number, and the caller would have no way to tell which. So the refusal names both and asks for the
-        fitted state instead."""
+        Two configured bundles may honestly serve the same target at the same horizon -- two architectures, two
+        regimes, two training windows. Answering with whichever one was enumerated first would put a model nobody chose
+        behind a confident number, and the caller would have no way to tell which. So the choice is made only from what
+        the request DECLARES: the fitted state it names (`config["state"]`, which the workbench fills from the example
+        the person picked), then the kind of answer it asks for. Where neither separates them, the refusal names the
+        candidates and how to name one."""
         matches = [b for b in self._bundles if target in b.targets and horizon in b.horizons]
-        if len(matches) > 1:
-            named = " and ".join(b.state_ref for b in matches)
-            raise ValueError(f"{target!r} at horizon {horizon!r} is served by more than one configured bundle "
-                             f"({named}); name the fitted state instead of letting this pick one")
         if not matches:
             raise ValueError(f"no configured bundle forecasts {target!r} at horizon {horizon!r}; available: "
                              f"{self._available()}")
+        if len(matches) > 1 and named is not None:
+            picked, why = self._named_bundle(matches, named)
+            if picked is None:
+                raise ValueError(why)
+            matches = [picked]
+        if len(matches) > 1:
+            chosen = self._by_head(matches, kind)
+            if chosen is not None:
+                matches = [chosen]
+        if len(matches) > 1:
+            named_refs = " and ".join(b.state_ref for b in matches)
+            raise ValueError(f"{target!r} at horizon {horizon!r} is served by more than one configured bundle "
+                             f"({named_refs}) and this request declares nothing that tells them apart; "
+                             f"{self.HOW_TO_DISAMBIGUATE}")
         return matches[0]
 
-    @staticmethod
-    def _window(data, bundle):
+    def _sibling_source(self, data, bundle):
+        """The OTHER configured bundle that standardized this window, when this one can read it exactly. Else `None`.
+
+        Two engines of the same series each publish their own scale, and a window standardized for one is meaningless
+        to the other: same numbers, different zero and different unit of spread. So a person who attaches the household
+        example and asks for an interval used to get `input columns, scale or scaler_digest mismatch` from the quantile
+        engine -- a true statement about an accident of packaging, not about the question.
+
+        This finds the sibling by its `scaler_digest`, which IDENTIFIES the engine that standardized the window; it is
+        never guessed. The conversion is only offered when the two engines describe the same observations: the same
+        column SET (order may differ and is corrected), the same window length, the same sampling step, and the same
+        unit and scale. Anything else returns `None` and the request is refused exactly as it was before.
+        """
+        if not isinstance(data, dict) or set(data) != WINDOW_KEYS:
+            return None
+        source = next((b for b in self._bundles
+                       if b is not bundle
+                       and b.manifest.get("scaler_digest") == data.get("scaler_digest")
+                       and data.get("scale") == b.input_scale
+                       and list(data.get("columns") or ()) == list(b.manifest["columns"])), None)
+        if source is None:
+            return None
+        mine, theirs = bundle.manifest, source.manifest
+        if (set(theirs["columns"]) != set(mine["columns"]) or theirs["window"] != mine["window"]
+                or theirs["step_seconds"] != mine["step_seconds"] or theirs["unit"] != mine["unit"]
+                or theirs["scale"] != mine["scale"] or source.readout != "target_scaler_inverse"
+                or mine.get("readout") != "target_scaler_inverse"):
+            return None
+        if any(sd <= 0 for sd in theirs["scaler"]["sd"]) or any(sd <= 0 for sd in mine["scaler"]["sd"]):
+            return None
+        return source
+
+    def _restandardize(self, data, bundle, source):
+        """The same observations, in this engine's own scale: undo the sibling's affine, reorder, apply this one's.
+
+        Nothing is modelled and nothing is filled in -- this is the caller's own window, arithmetic only. The answer
+        says which engine's scale it arrived in (`input_restandardized_from`), because a number produced from a window
+        the server transformed must not look like one produced from the window the caller sent."""
+        theirs, mine = source.manifest, bundle.manifest
+        their_columns = list(theirs["columns"])
+        rows = []
+        for row in data["values"]:
+            raw = {name: float(row[i]) * float(theirs["scaler"]["sd"][i]) + float(theirs["scaler"]["mean"][i])
+                   for i, name in enumerate(their_columns)}
+            rows.append([(raw[name] - float(mine["scaler"]["mean"][j])) / float(mine["scaler"]["sd"][j])
+                         for j, name in enumerate(mine["columns"])])
+        return {"columns": list(mine["columns"]), "values": rows, "scale": bundle.input_scale,
+                "scaler_digest": mine["scaler_digest"]}
+
+    def _window(self, data, bundle):
         """The standardized window this request will carry, from whatever the caller attached.
 
         An already-standardized window (or a list holding exactly one, which is how the workbench attaches a JSON file)
         is returned UNCHANGED -- not rebuilt, not re-hashed -- so a caller that was working keeps working byte for byte.
-        Raw rows go through `window_from_rows`. Anything else is handed on untouched, to be refused by the request check
-        that has always refused it, with the message it has always used."""
-        if _standardized_window(data):
-            return data
+        A window standardized by ANOTHER configured engine of the same series is re-expressed in this engine's scale
+        (`_sibling_source` says when that is exact). Raw rows go through `window_from_rows`. Anything else is handed on
+        untouched, to be refused by the request check that has always refused it, with the message it has always used."""
         if isinstance(data, list) and len(data) == 1 and _standardized_window(data[0]):
-            return data[0]
+            data = data[0]
+        if _standardized_window(data):
+            if (list(data["columns"]) == list(bundle.manifest["columns"])
+                    and data["scaler_digest"] == bundle.manifest["scaler_digest"]):
+                return data
+            source = self._sibling_source(data, bundle)
+            return self._restandardize(data, bundle, source) if source is not None else data
         if isinstance(data, str) or (isinstance(data, list) and data and all(isinstance(r, dict) for r in data)):
             return window_from_rows(data, bundle)
         return data
@@ -986,7 +1158,10 @@ class ForecastProvider:
                                  + "; ".join(f"forecast {b.targets[0]} at {h} steps"
                                              for b in self._bundles for h in b.horizons))
             target, horizon = match[1], int(match[2])
-        bundle = self._resolve(target, horizon)
+        # the fitted state the config names is a DECLARED choice of engine, and it settles an ambiguity before the
+        # head rule has to: the workbench fills it from the example the person chose
+        declared_state = config.get("state") if isinstance(config, dict) else None
+        bundle = self._resolve(target, horizon, named=declared_state if isinstance(declared_state, str) else None)
         return self._request_for(bundle, prompt, data, config, target=target, horizon=horizon)
 
     def _request_for(self, bundle, prompt, data, config, *, target=None, horizon=None):
@@ -1052,6 +1227,10 @@ class ForecastProvider:
                       if unit == "probability" else f"forecast {bundle.targets[0]} at {bundle.horizons[0]} steps")
             examples.append({"title": bundle.title,
                              "prompt": prompt,
+                             # which representation produced the engine behind this example, or the constant that says
+                             # the bundle does not record one
+                             "representation_spec": bundle.representation_spec,
+                             "heads": bundle.heads,
                              "reading": (f"{family}: the answer is a {unit}, not a level; output_kind "
                                          f"{bundle.combination['output_kind']} names the payload shape only")
                              if unit == "probability" else
@@ -1091,9 +1270,9 @@ class ForecastProvider:
         distribution, not the distribution. Both types are DECLARED so the refusal can say the true thing -- a type the
         area does not declare is refused by the envelope as UNSUPPORTED_QUESTION_TYPE, which says only that the word is
         unknown here."""
-        return {"point_forecast": {"required": ["horizon"], "optional": ["target"]},
-                "interval": {"required": ["horizon", "confidence_level"], "optional": ["target"]},
-                "anomaly_risk": {"required": ["threshold"], "optional": ["horizon", "target"]}}
+        return {"point_forecast": {"required": ["horizon"], "optional": ["target", "bundle"]},
+                "interval": {"required": ["horizon", "confidence_level"], "optional": ["target", "bundle"]},
+                "anomaly_risk": {"required": ["threshold"], "optional": ["horizon", "target", "bundle"]}}
 
     def _resolve_question(self, state, question):
         """The one bundle a question is about, or a refusal naming why there is not exactly one.
@@ -1119,16 +1298,48 @@ class ForecastProvider:
             if target is not None and target not in bundle.targets:
                 return None, _refusal(NOT_ESTIMABLE, f"fitted state {state_ref!r} forecasts {bundle.targets[0]!r}, "
                                                      f"not {target!r}", kind)
+            if question.get("bundle") is not None and self._named_bundle([bundle], question["bundle"])[0] is None:
+                return None, _refusal(STATE_REQUIRED, f"the state names fitted state {state_ref!r} and the question "
+                                                      f"names bundle {question['bundle']!r}; one request, one engine",
+                                      kind)
         else:
             holders = [b for b in self._bundles if target in b.targets]
             if not holders:
                 return None, _refusal(NOT_ESTIMABLE, f"no configured bundle forecasts {target!r}; available: "
                                                      f"{self._available()}", kind)
+            horizon_asked = question.get("horizon")
+            if len(holders) > 1 and type(horizon_asked) is int:
+                narrowed = [b for b in holders if horizon_asked in b.horizons]
+                holders = narrowed or holders
+            if question.get("bundle") is not None:
+                # checked even when only one bundle holds the target: a request that names a bundle is answered by that
+                # bundle or refused, never by another one that happens to be the only candidate
+                picked, why = self._named_bundle(holders, question["bundle"])
+                if picked is None:
+                    return None, _refusal(STATE_REQUIRED, why, kind)
+                holders = [picked]
             if len(holders) > 1:
+                # Several fitted bundles honestly serve this series. Which one a request means is settled by what the
+                # request DECLARES -- the bundle it names, or the kind of answer it asks for -- and never by the order
+                # they happened to be discovered in.
+                chosen = self._by_head(holders, kind)
+                if chosen is not None:
+                    holders = [chosen]
+            if len(holders) > 1:
+                if kind == "anomaly_risk":
+                    # every one of them refuses this question, so the ambiguity changes no answer: the refusal is the
+                    # same NOT_ESTIMABLE it would be with one bundle, and it names each engine and why each cannot
+                    reasons = "; ".join(
+                        f"{b.state_ref}: " + (QUANTILES_ARE_NOT_A_CDF.format(count=len(b.quantiles),
+                                                                             quantiles=b.quantiles)
+                                              if b.quantiles else NO_DISTRIBUTION)
+                        for b in holders)
+                    return None, _refusal(NOT_ESTIMABLE, f"no configured bundle that serves {target!r} can: {reasons}",
+                                          kind)
                 named = " and ".join(b.state_ref for b in holders)
                 return None, _refusal(STATE_REQUIRED, f"{target!r} is served by more than one configured bundle "
-                                                      f"({named}); name the fitted state by `state_ref` instead of "
-                                                      f"letting this pick one", kind)
+                                                      f"({named}) and this request declares nothing that tells them "
+                                                      f"apart; {self.HOW_TO_DISAMBIGUATE}", kind)
             bundle = holders[0]
         horizon = question.get("horizon")
         if horizon is not None:
@@ -1143,7 +1354,11 @@ class ForecastProvider:
 
     def _answer_payload(self, bundle, question, data, as_of):
         """The real engine, on the same path the workbench takes: `chat_request` builds and checks the request, `load`
-        verifies the artifact, `infer` runs the native graph. Nothing about the numbers is computed here."""
+        verifies the artifact, `infer` runs the native graph. Nothing about the numbers is computed here.
+
+        Returns the payload, the request, the uncertainty, and -- when the caller's window arrived in another
+        configured engine's scale and was re-expressed in this one's -- that engine's state_ref, so the answer can say
+        so instead of presenting a converted window as the one that was sent."""
         if isinstance(data, list) and len(data) == 1 and _standardized_window(data[0]):
             data = data[0]                                 # the workbench attaches a list of one history window
         config = {"input": "json", "provider": self.name, "family": bundle.combination["family"],
@@ -1151,17 +1366,21 @@ class ForecastProvider:
                   "as_of": as_of or datetime.now(timezone.utc).isoformat(), "parameters": {}}
         request = self._request_for(bundle, f"forecast {bundle.targets[0]} at {question['horizon']} steps",
                                      data, config, target=bundle.targets[0], horizon=question["horizon"])
+        source = self._sibling_source(data, bundle) if _standardized_window(data) else None
         result = self.infer(request, self.load(bundle.state_ref))
         answer = result["outputs"][bundle.targets[0]]
-        return answer["payload"], request, answer["uncertainty"]
+        return answer["payload"], request, answer["uncertainty"], (source.state_ref if source is not None else None)
 
     def _point_forecast(self, bundle, question, data, as_of):
-        payload, request, uncertainty = self._answer_payload(bundle, question, data, as_of)
+        payload, request, uncertainty, restandardized = self._answer_payload(bundle, question, data, as_of)
         at = payload["horizons"].index(question["horizon"])
-        return {"type": "point_forecast", "values": [payload["values"][0][at]],
-                "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
-                "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
-                "uncertainty": uncertainty, "execution_authorized": False}
+        answer = {"type": "point_forecast", "values": [payload["values"][0][at]],
+                  "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
+                  "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
+                  "uncertainty": uncertainty, "execution_authorized": False}
+        if restandardized:
+            answer["input_restandardized_from"] = restandardized
+        return answer
 
     def _interval(self, bundle, question, data, as_of):
         """The interval of ONE fitted quantile pair, or a refusal that names what is fitted.
@@ -1184,17 +1403,20 @@ class ForecastProvider:
                             f"{bundle.state_ref} fitted the quantiles {bundle.quantiles}, whose symmetric pairs cover "
                             f"{sorted(fitted)}; {level} is not one of them. A level this model was not fitted for is "
                             f"refused, not widened or narrowed from one that was", kind)
-        payload, request, uncertainty = self._answer_payload(bundle, question, data, as_of)
+        payload, request, uncertainty, restandardized = self._answer_payload(bundle, question, data, as_of)
         at = payload["horizons"].index(question["horizon"])
         low = payload["quantiles"].index(pair[0])
         high = payload["quantiles"].index(pair[1])
         bounds = payload["quantile_values"][0][at]
-        return {"type": "interval", "values": [[bounds[low], bounds[high]]],
-                "confidence_level": float(level), "quantiles": [pair[0], pair[1]],
-                "point": payload["values"][0][at],
-                "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
-                "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
-                "uncertainty": uncertainty, "execution_authorized": False}
+        answer = {"type": "interval", "values": [[bounds[low], bounds[high]]],
+                  "confidence_level": float(level), "quantiles": [pair[0], pair[1]],
+                  "point": payload["values"][0][at],
+                  "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
+                  "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
+                  "uncertainty": uncertainty, "execution_authorized": False}
+        if restandardized:
+            answer["input_restandardized_from"] = restandardized
+        return answer
 
     def answer_questions(self, state, questions, data, as_of):
         """Every question on its own: a point forecast from the graph that has one, a typed refusal for a distribution

@@ -13,7 +13,8 @@ import tempfile
 
 import numpy as np
 
-from .provider import (COMBINATION, SCHEMA_V2, UNMEASURED, ForecastProvider, cpu_tensorflow, digest,
+from .provider import (COMBINATION, REPRESENTATION_NOT_RECORDED, SCHEMA_V2, UNMEASURED, ForecastProvider,
+                       cpu_tensorflow, digest,
                        file_digest)
 
 
@@ -616,9 +617,16 @@ def _export_fitted_forecast(fit_root, destination, state_id, title):
     name = state_id or f"{fit['stage'].replace('_', '-')}-{Path(fit['data']['path']).stem.replace('_', '-')}"
     step = int(fit["step_seconds"])
     minutes = step == 60
+    # WP06: which designed representation produced this bundle. It is copied from the run manifest, where the fitting
+    # tool wrote the representation BY VALUE; a run manifest that carried only a path to the spec file records nothing
+    # here, because a path is not an answer -- the file may have changed, or may not exist on the host that reads this.
+    representation = (fit["spec"] or {}).get("representation")
+    if not isinstance(representation, dict) or not str(representation.get("schema") or "").strip():
+        representation = REPRESENTATION_NOT_RECORDED
     manifest = {
         "schema": SCHEMA_V2, "engine": "tensorflow_saved_model",
         "exposure": FITTED_EXPOSURE,
+        "representation_spec": representation,
         "state_id": name, "task_id": f"predictor.{name}.W{window}_h{horizons[0]}",
         "title": title or (f"DEVELOPMENT: {fit['stage']} household forecast, "
                            f"{'quantile' if quantiles else 'point'} head at {horizons[0]} steps"),
@@ -654,7 +662,9 @@ def _export_fitted_forecast(fit_root, destination, state_id, title):
                            "sealed_rows": fit["population"]["sealed_rows"],
                            "sealed_at": fit["population"]["sealed_at"],
                            "report_sha256": hashes["report"]},
-            "representation_spec": fit["spec"],
+            # the REFERENCE to the spec file the fit read: its path, its digest, its decision records. The
+            # representation itself is the top-level `representation_spec`; this says where it came from.
+            "representation_spec_ref": fit["spec"],
             "preprocessing": fit["preprocessing"],
             "training": fit["training"],
             "keras": keras.__version__, "tensorflow": tf.__version__, "numpy": np.__version__,
