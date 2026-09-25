@@ -48,7 +48,18 @@ UNMEASURED = "UNMEASURED"
 #: what a bundle is allowed to say about held-out exposure. `DEV_ONLY_NO_TEST_ACCESS` is a RECEIPT: a governed run wrote
 #: it and the exporter checked it. predictor's committed example checkpoints have no such receipt, so they say so instead
 #: of borrowing the stronger wording -- a bundle that claims a receipt nobody wrote is worse than one that claims none.
-EXPOSURES = ("DEV_ONLY_NO_TEST_ACCESS", "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT")
+#: `DEV_FIT_HOLDOUT_SEALED_BEFORE_SCORING` is the third, and it is the weakest of the three on purpose: it says a fit
+#: was made on TRAIN rows only against a holdout whose rows and labels were sealed BEFORE any weight moved, and nothing
+#: more. It is not the governed run's receipt, and the quality measured on that holdout lives in the evaluation report
+#: that measured it, never in this manifest -- this package still publishes `quality: UNMEASURED`, because it scored
+#: nothing itself.
+EXPOSURES = ("DEV_ONLY_NO_TEST_ACCESS", "PREDICTOR_EXAMPLE_NO_EXPOSURE_RECEIPT",
+             "DEV_FIT_HOLDOUT_SEALED_BEFORE_SCORING")
+
+#: what a v2 bundle may declare its graph emits. `point` is the default and the only thing every bundle before WP07 had:
+#: one number per target and horizon. `quantile` says the graph emits one number per target, horizon AND declared
+#: quantile, which is what makes an interval readable instead of manufactured.
+HEADS = ("point", "quantile")
 
 #: what a v2 bundle must say about where its weights came from. A bundle that cannot say what it was trained on, by whom
 #: and when is refused at construction: serving it would put an unattributable model behind a confident answer.
@@ -62,6 +73,11 @@ STATE_REQUIRED = "STATE_REQUIRED"
 MALFORMED_QUESTION = "MALFORMED_QUESTION"
 PROVIDER_ERROR = "PROVIDER_ERROR"
 
+#: the confidence level asked for has no pair of FITTED quantiles. A 0.95 interval is not obtained by widening a 0.90
+#: one, and the two bounds of an interval are two quantiles somebody fitted or they are two numbers somebody invented.
+#: So the level is refused by name, with the levels the bundle does hold.
+CONFIDENCE_LEVEL_NOT_FITTED = "CONFIDENCE_LEVEL_NOT_FITTED"
+
 #: why an interval or an anomaly risk is refused by every bundle this package serves. The retained graphs are point
 #: models: one number per target and horizon, no quantile head, no ensemble, no residual distribution recorded at
 #: export. A bound or a probability of crossing a threshold would have to be manufactured from nothing, so both types are
@@ -69,6 +85,13 @@ PROVIDER_ERROR = "PROVIDER_ERROR"
 #: quantiles, that is where an interval gets computed -- not before.
 NO_DISTRIBUTION = ("it emits a point estimate and no predictive distribution; an interval would require a quantile or "
                    "ensemble head this bundle does not have")
+
+#: why an anomaly risk stays refused even for a bundle that DOES carry quantiles. A handful of fitted quantiles is not a
+#: distribution: the probability of crossing a threshold between two of them would have to come from an interpolation
+#: nobody fitted, and outside them from a tail nobody fitted at all.
+QUANTILES_ARE_NOT_A_CDF = ("it carries {count} fitted quantiles {quantiles}, which are {count} points of a predictive "
+                           "distribution and not the distribution: the probability of crossing a threshold would have "
+                           "to be interpolated between them, or extrapolated beyond them, and neither was fitted")
 
 
 def digest(value):
@@ -163,6 +186,42 @@ class _Bundle:
     @property
     def readout(self):
         return "target_scaler_inverse" if self.schema == SCHEMA_V1 else self.manifest["readout"]
+
+    @property
+    def heads(self):
+        """What the graph emits. A manifest that declares nothing emits a point, which is what every bundle before WP07
+        was; the field is never inferred from the output width, because a wider graph could be many things."""
+        return [str(h) for h in (self.manifest.get("heads") or ["point"])]
+
+    @property
+    def quantiles(self):
+        """The fitted quantiles, ascending, or an empty list for a point bundle. These are the ONLY levels this bundle
+        can bound: a quantile it did not fit does not become available by arithmetic on the ones it did."""
+        if "quantile" not in self.heads:
+            return []
+        return [float(q) for q in self.manifest["quantiles"]]
+
+    @property
+    def median_index(self):
+        return self.quantiles.index(0.5) if self.quantiles else None
+
+    @property
+    def width(self):
+        """How many numbers the graph emits per window: one per target, horizon and -- with a quantile head -- quantile."""
+        return len(self.targets) * len(self.horizons) * (len(self.quantiles) or 1)
+
+    def fitted_levels(self):
+        """`{confidence level: (low quantile, high quantile)}` for the SYMMETRIC pairs this bundle actually fitted.
+
+        Symmetric because that is what a two-sided confidence level means: the pair (q, 1-q) leaves the same mass on
+        each side and covers 1-2q. An asymmetric pair covers an interval too, but not one any `confidence_level` names,
+        so it is not offered under a number that would suggest it does."""
+        levels = {}
+        for low in self.quantiles:
+            high = round(1.0 - low, 9)
+            if low < 0.5 and high in [round(q, 9) for q in self.quantiles]:
+                levels[round(high - low, 9)] = (low, high)
+        return levels
 
     @property
     def input_scale(self):
@@ -266,6 +325,7 @@ class _Bundle:
             raise ValueError(f"{self.path.name}: state_id must be a short lowercase identifier")
         if m.get("readout") not in READOUTS:
             raise ValueError(f"{self.path.name}: readout must be one of {READOUTS}")
+        self._validate_heads()
         for key in ("aliases", "horizon_aliases"):
             declared = m.get(key) or {}
             if not isinstance(declared, dict):
@@ -275,6 +335,38 @@ class _Bundle:
                 raise ValueError(f"{self.path.name}: {key} names a value this bundle does not have")
             if any(not _text(v) for names in declared.values() for v in names):
                 raise ValueError(f"{self.path.name}: {key} entries must be nonempty strings")
+
+    def _validate_heads(self):
+        """A head this package cannot serve, or a quantile set that is not one, is refused at construction.
+
+        The median is required of a quantile bundle because the bundle still has to publish a POINT forecast, and the
+        point of a quantile head is its median -- picking the nearest quantile instead, or averaging two of them, would
+        publish a number the graph was never fitted to produce."""
+        m = self.manifest
+        heads = m.get("heads")
+        if heads is None:
+            if "quantiles" in m:
+                raise ValueError(f"{self.path.name}: quantiles are declared but no quantile head is; a bundle says what "
+                                 f"its graph emits")
+            return
+        if (not isinstance(heads, list) or not heads or len(set(heads)) != len(heads)
+                or any(h not in HEADS for h in heads)):
+            raise ValueError(f"{self.path.name}: heads must be a list of distinct names out of {list(HEADS)}")
+        if "quantile" not in heads:
+            if "quantiles" in m:
+                raise ValueError(f"{self.path.name}: quantiles are declared without a quantile head")
+            return
+        quantiles = m.get("quantiles")
+        if (not isinstance(quantiles, list) or len(quantiles) < 2
+                or any(type(q) not in (int, float) or not math.isfinite(q) or not 0 < q < 1 for q in quantiles)):
+            raise ValueError(f"{self.path.name}: a quantile head declares at least two quantiles, each strictly "
+                             f"inside (0, 1)")
+        if any(b <= a for a, b in zip(quantiles, quantiles[1:])):
+            raise ValueError(f"{self.path.name}: quantiles must be strictly ascending; a set given out of order would "
+                             f"pair the wrong columns into an interval")
+        if 0.5 not in quantiles:
+            raise ValueError(f"{self.path.name}: a quantile head must fit the median, which is the point forecast this "
+                             f"bundle publishes; without it there is no point this graph was fitted to produce")
 
     def _validate_shape_and_scaler(self):
         m = self.manifest
@@ -628,8 +720,12 @@ class ForecastProvider:
         # Each bundle says which standardisation its history rows must already be in. One value stays a plain string, as
         # it always was; several are listed, because a caller told a single scale would standardise for the wrong bundle.
         scales = _dedup([b.input_scale for b in self._bundles]) or ["train_standardized"]
+        # a quantile bundle answers one more kind of question and carries one more kind of uncertainty; both are listed
+        # only when a configured bundle actually has the head, never as a shape the area might one day fill
+        quantile = any("quantile" in b.heads for b in self._bundles)
         return {"operations": ["infer"], "families": families or [COMBINATION["family"]],
-                "output_kinds": ["point_forecast"], "uncertainty_methods": ["none"],
+                "output_kinds": ["point_forecast"] + (["interval"] if quantile else []),
+                "uncertainty_methods": (["none"] + ["fitted_quantiles"]) if quantile else ["none"],
                 "supported": supported or [dict(COMBINATION)], "known_states": self.known_states(),
                 "backend": "tensorflow_saved_model_cpu_subprocess" if self._worker_python else "tensorflow_saved_model_cpu",
                 "input_schema": {"kind": "one_history_window",
@@ -660,7 +756,7 @@ class ForecastProvider:
                 args, kwargs = engine.structured_input_signature
                 outputs = engine.structured_outputs
                 shape = (1, bundle.manifest["window"], len(bundle.manifest["columns"]))
-                width = len(bundle.targets) * len(bundle.horizons)
+                width = bundle.width
                 if (args or set(kwargs) != {"x"} or kwargs["x"].shape != shape
                         or kwargs["x"].dtype != tf.float32 or set(outputs) != {"forecast"}
                         or outputs["forecast"].shape != (1, width) or outputs["forecast"].dtype != tf.float32):
@@ -742,7 +838,7 @@ class ForecastProvider:
             tf = cpu_tensorflow()
             with tf.device("/CPU:0"):
                 result = bundle.engine(x=tf.convert_to_tensor(x))["forecast"].numpy()
-        width = len(bundle.targets) * len(bundle.horizons)
+        width = bundle.width
         if result.shape != (1, width) or not np.isfinite(result).all():
             raise ValueError("native engine returned invalid forecast shape or non-finite values")
         # Preserve native float32 arithmetic, including its original-scale readout.
@@ -755,8 +851,23 @@ class ForecastProvider:
         if not np.isfinite(values).all():
             raise ValueError("native output scaling produced a non-finite forecast")
         target = bundle.targets[0]
-        payload = dict(bundle.output_schema(), values=values.reshape(1, len(bundle.horizons)).tolist())
-        return {"outputs": {target: {"status": "OK", "uncertainty": "none", "payload": payload}},
+        quantiles = bundle.quantiles
+        if quantiles:
+            # the graph emits the quantiles of one horizon together, horizon-major: [(h1,q1)...(h1,qK),(h2,q1)...]
+            grid = values.reshape(len(bundle.horizons), len(quantiles))
+            point = grid[:, bundle.median_index]
+            if (np.diff(grid, axis=1) < 0).any():
+                # the head is built so this cannot happen; if it ever does, the pair is not an interval and no number
+                # is published rather than one whose bounds are the wrong way round
+                raise ValueError("native engine returned crossing quantiles; the bounds of an interval cannot cross")
+            payload = dict(bundle.output_schema(), values=point.reshape(1, len(bundle.horizons)).tolist(),
+                           quantiles=list(quantiles), quantile_values=grid.reshape(
+                               1, len(bundle.horizons), len(quantiles)).tolist())
+            uncertainty = "fitted_quantiles"
+        else:
+            payload = dict(bundle.output_schema(), values=values.reshape(1, len(bundle.horizons)).tolist())
+            uncertainty = "none"
+        return {"outputs": {target: {"status": "OK", "uncertainty": uncertainty, "payload": payload}},
                 "population": copy.deepcopy(request["population"])}
 
     def chat_combinations(self):
@@ -961,11 +1072,13 @@ class ForecastProvider:
     def question_types(self):
         """The types a caller may ask this area, with the fields each takes.
 
-        `interval` and `anomaly_risk` are declared on purpose although every configured bundle refuses them: a type the
+        `interval` is answered by a bundle whose manifest declares a `quantile` head, from the fitted pair that covers
+        the confidence level asked for, and refused by every other bundle -- by `NOT_ESTIMABLE` when the bundle has no
+        distribution at all, and by `CONFIDENCE_LEVEL_NOT_FITTED` when it has quantiles but not that pair.
+        `anomaly_risk` stays refused by every bundle, quantile head or not: a few fitted quantiles are points of a
+        distribution, not the distribution. Both types are DECLARED so the refusal can say the true thing -- a type the
         area does not declare is refused by the envelope as UNSUPPORTED_QUESTION_TYPE, which says only that the word is
-        unknown here. Declaring them lets the refusal say the true thing -- the model exists, it answers the point
-        forecast, and it has no distribution to bound -- and it lets the catalog show the shape a future bundle with a
-        quantile head would fill."""
+        unknown here."""
         return {"point_forecast": {"required": ["horizon"], "optional": ["target"]},
                 "interval": {"required": ["horizon", "confidence_level"], "optional": ["target"]},
                 "anomaly_risk": {"required": ["threshold"], "optional": ["horizon", "target"]}}
@@ -1016,9 +1129,9 @@ class ForecastProvider:
                                                      f"model was not trained for is refused, not rounded", kind)
         return bundle, None
 
-    def _point_forecast(self, bundle, question, data, as_of):
+    def _answer_payload(self, bundle, question, data, as_of):
         """The real engine, on the same path the workbench takes: `chat_request` builds and checks the request, `load`
-        verifies the artifact, `infer` runs the native graph. Nothing about the number is computed here."""
+        verifies the artifact, `infer` runs the native graph. Nothing about the numbers is computed here."""
         if isinstance(data, list) and len(data) == 1 and _standardized_window(data[0]):
             data = data[0]                                 # the workbench attaches a list of one history window
         config = {"input": "json", "provider": self.name, "family": bundle.combination["family"],
@@ -1027,12 +1140,49 @@ class ForecastProvider:
         request = self.chat_request(f"forecast {bundle.targets[0]} at {question['horizon']} steps", data, config,
                                     parameters={"target": bundle.targets[0], "horizon": question["horizon"]})
         result = self.infer(request, self.load(bundle.state_ref))
-        payload = result["outputs"][bundle.targets[0]]["payload"]
+        answer = result["outputs"][bundle.targets[0]]
+        return answer["payload"], request, answer["uncertainty"]
+
+    def _point_forecast(self, bundle, question, data, as_of):
+        payload, request, uncertainty = self._answer_payload(bundle, question, data, as_of)
         at = payload["horizons"].index(question["horizon"])
         return {"type": "point_forecast", "values": [payload["values"][0][at]],
                 "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
                 "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
-                "uncertainty": "none", "execution_authorized": False}
+                "uncertainty": uncertainty, "execution_authorized": False}
+
+    def _interval(self, bundle, question, data, as_of):
+        """The interval of ONE fitted quantile pair, or a refusal that names what is fitted.
+
+        Three refusals, and none of them is a near miss answered anyway: a bundle with no quantile head has no
+        distribution to bound; a confidence level that is not a number is malformed; and a level no fitted pair covers
+        is refused by name with the levels that exist, because the bounds of an interval are two quantiles somebody
+        fitted or they are two numbers somebody invented."""
+        kind = question["type"]
+        if "quantile" not in bundle.heads:
+            return _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {NO_DISTRIBUTION}", kind)
+        level = question.get("confidence_level")
+        if type(level) not in (int, float) or isinstance(level, bool) or not math.isfinite(level) or not 0 < level < 1:
+            return _refusal(MALFORMED_QUESTION, f"confidence_level must be a number strictly inside (0, 1), not "
+                                                f"{level!r}", kind)
+        fitted = bundle.fitted_levels()
+        pair = fitted.get(round(float(level), 9))
+        if pair is None:
+            return _refusal(CONFIDENCE_LEVEL_NOT_FITTED,
+                            f"{bundle.state_ref} fitted the quantiles {bundle.quantiles}, whose symmetric pairs cover "
+                            f"{sorted(fitted)}; {level} is not one of them. A level this model was not fitted for is "
+                            f"refused, not widened or narrowed from one that was", kind)
+        payload, request, uncertainty = self._answer_payload(bundle, question, data, as_of)
+        at = payload["horizons"].index(question["horizon"])
+        low = payload["quantiles"].index(pair[0])
+        high = payload["quantiles"].index(pair[1])
+        bounds = payload["quantile_values"][0][at]
+        return {"type": "interval", "values": [[bounds[low], bounds[high]]],
+                "confidence_level": float(level), "quantiles": [pair[0], pair[1]],
+                "point": payload["values"][0][at],
+                "unit": payload["unit"], "scale": payload["scale"], "targets": list(payload["targets"]),
+                "horizons": [question["horizon"]], "state_ref": bundle.state_ref, "as_of": request["as_of"],
+                "uncertainty": uncertainty, "execution_authorized": False}
 
     def answer_questions(self, state, questions, data, as_of):
         """Every question on its own: a point forecast from the graph that has one, a typed refusal for a distribution
@@ -1044,15 +1194,16 @@ class ForecastProvider:
             if refused is not None:
                 answers[name] = refused
                 continue
-            if kind == "interval":
-                answers[name] = _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {NO_DISTRIBUTION}", kind)
-            elif kind == "anomaly_risk":
-                answers[name] = _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {NO_DISTRIBUTION}; a probability "
+            if kind == "anomaly_risk":
+                why = (QUANTILES_ARE_NOT_A_CDF.format(count=len(bundle.quantiles), quantiles=bundle.quantiles)
+                       if bundle.quantiles else NO_DISTRIBUTION)
+                answers[name] = _refusal(NOT_ESTIMABLE, f"{bundle.state_ref} cannot: {why}; a probability "
                                                         f"of crossing {question['threshold']!r} is a statement about "
                                                         f"that distribution", kind)
             else:
                 try:
-                    answers[name] = self._point_forecast(bundle, question, data, as_of)
+                    answers[name] = (self._interval(bundle, question, data, as_of) if kind == "interval"
+                                     else self._point_forecast(bundle, question, data, as_of))
                 except RowAdapterRefusal as exc:
                     # the rows themselves are what is wrong, and the refusal already says which way: keep that name
                     # rather than burying it under the exception class the envelope does not know about

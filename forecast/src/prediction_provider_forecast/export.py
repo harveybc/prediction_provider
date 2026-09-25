@@ -5,6 +5,7 @@ import csv
 from datetime import datetime, timezone
 import importlib.util
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -12,7 +13,7 @@ import tempfile
 
 import numpy as np
 
-from .provider import (SCHEMA_V2, UNMEASURED, ForecastProvider, cpu_tensorflow, digest,
+from .provider import (COMBINATION, SCHEMA_V2, UNMEASURED, ForecastProvider, cpu_tensorflow, digest,
                        file_digest)
 
 
@@ -477,6 +478,220 @@ def _export_predictor_example(predictor_root, inference_config, destination):
     _write(out / "parity.json", {"native_values": expected.tolist(), "provider_values": actual,
                                  "rtol": 1e-6, "atol": 1e-6,
                                  "max_absolute_error": float(np.max(np.abs(np.asarray(actual) - expected))),
+                                 "state_digest": state["digest"], "model_sha256": state["model_sha256"],
+                                 "input_sha256": digest(data), "population": "TRAIN history only",
+                                 "no_training": True, "no_heldout_scoring": True, "device": "CPU"})
+    return {"bundle": str(out), "state_ref": state["state_ref"], "native_parity": "PASS"}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# a bundle fitted by predictor's `tools/fit_pipeline_spec.py`
+#
+# WP18 step 7 fits one pipeline spec on a holdout that was SEALED BEFORE the fit and writes, beside the graph, a run
+# manifest (`predictor.fitted_forecast.v1`) naming the columns, the window, the horizon, the scaler fitted on the train
+# rows only, the seal and the protocol the holdout was scored under. That is everything a servable bundle needs and it is
+# all written by the tool that did the fitting, so this exporter READS -- it never re-derives a scaler, never re-reads a
+# label, never scores anything. The quality measured on that holdout stays in the evaluation report that measured it;
+# this manifest still says `quality: UNMEASURED`, because this package computed none of it.
+# ---------------------------------------------------------------------------------------------------------------------
+
+#: schema of predictor's run manifest. A different one is not a weaker manifest but an unknown one.
+FITTED_SCHEMA = "predictor.fitted_forecast.v1"
+
+#: exposure of a bundle fitted this way: the seal is the receipt, and it is the only claim made
+FITTED_EXPOSURE = "DEV_FIT_HOLDOUT_SEALED_BEFORE_SCORING"
+
+
+def export_fitted_forecast(fit_root, destination, *, state_id=None, title=None):
+    """Export one graph fitted by `tools/fit_pipeline_spec.py` as a servable v2 bundle. Never trains, never scores."""
+    return _staged(destination, lambda staging: _export_fitted_forecast(fit_root, staging, state_id, title))
+
+
+def _fitted_history_window(fit, columns):
+    """The FIRST window of the training file, standardised with the bundle's own scaler. No label column is read.
+
+    The parity population is deliberately a TRAIN window: the sealed holdout is what the model is judged on, and reading
+    one of its rows here -- even as input, even without its label -- would put the export inside the evaluation.
+    """
+    path = Path(fit["data"]["path"])
+    window = int(fit["window"])
+    with path.open(newline="") as stream:
+        reader = csv.reader(stream)
+        header = next(reader)
+        if len(set(header)) != len(header):
+            raise ValueError(f"{path.name} has duplicate column names; the feature order cannot be resolved")
+        wanted = set(columns)
+        if [c for c in header if c in wanted] != list(columns):
+            raise ValueError("the run manifest's feature order does not match the training file's column order")
+        index = {name: position for position, name in enumerate(header)}
+        rows = []
+        for raw in reader:
+            rows.append([float(raw[index[c]]) for c in columns])
+            if len(rows) == window:
+                break
+    if len(rows) < window:
+        raise ValueError(f"{path.name} has fewer than {window} rows; no history window can be taken")
+    raw = np.asarray(rows, dtype=np.float64)
+    mean = np.asarray(fit["scaler"]["mean"], dtype=np.float64)
+    sd = np.asarray(fit["scaler"]["sd"], dtype=np.float64)
+    x = ((raw - mean) / sd).astype(np.float32)[None, :, :]
+    if not np.isfinite(x).all():
+        raise ValueError("the first training history window contains non-finite values")
+    return x
+
+
+def _export_fitted_forecast(fit_root, destination, state_id, title):
+    root = Path(fit_root).resolve()
+    out = Path(destination).resolve()
+    manifest_path = root / "fitted" / "fit_manifest.json"
+    model_path = root / "fitted" / "model.keras"
+    report_path = root / "report.json"
+    for path in (manifest_path, model_path, report_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"missing fitted artifact: {path}")
+    fit = json.loads(manifest_path.read_text())
+    if fit.get("schema") != FITTED_SCHEMA:
+        raise ValueError(f"{manifest_path.name}: schema {fit.get('schema')!r} is not {FITTED_SCHEMA!r}")
+    for key in ("stage", "fitted_at", "config", "columns", "target", "horizons", "window", "step_seconds",
+                "scaler", "data", "population", "training", "plugin_module", "head"):
+        if key not in fit:
+            raise ValueError(f"{manifest_path.name} does not declare {key}; it is not an exportable run manifest")
+    columns = list(fit["columns"])
+    target = fit["target"]
+    horizons = [int(h) for h in fit["horizons"]]
+    window = int(fit["window"])
+    head = fit["head"]
+    if head not in ("point", "quantile"):
+        raise ValueError(f"unsupported fitted head {head!r}")
+    quantiles = [float(q) for q in (fit.get("quantiles") or ())] if head == "quantile" else []
+    if head == "quantile" and (len(quantiles) < 2 or 0.5 not in quantiles):
+        raise ValueError("a quantile head is exported only with at least two quantiles including the median")
+    if target not in columns or len(horizons) != 1:
+        raise ValueError("only a single-horizon graph whose target is one of its input columns is exported")
+    scaler_mean, scaler_sd = fit["scaler"]["mean"], fit["scaler"]["sd"]
+    if (len(scaler_mean) != len(columns) or len(scaler_sd) != len(columns)
+            or any(not math.isfinite(v) for v in scaler_mean) or any(v <= 0 for v in scaler_sd)):
+        raise ValueError("the run manifest's scaler does not cover every input column with a positive spread")
+    report = json.loads(report_path.read_text())
+    if report.get("corpus_seal") != fit["population"]["seal"]:
+        raise ValueError("the evaluation report beside this fit was computed against another corpus seal")
+
+    hashes = {"model": file_digest(model_path), "fit_manifest": file_digest(manifest_path),
+              "report": file_digest(report_path)}
+    tf = cpu_tensorflow()
+    import keras
+    model = keras.saving.load_model(str(model_path), compile=False)
+    width = len(horizons) * (len(quantiles) or 1)
+    if tuple(model.input_shape) != (None, window, len(columns)):
+        raise ValueError(f"the saved graph expects {model.input_shape}, not the window this run manifest describes")
+    if tuple(model.output_shape) != (None, width):
+        raise ValueError(f"the saved graph emits {model.output_shape}, not the {width} value(s) this manifest declares")
+    x = _fitted_history_window(fit, columns)
+    with tf.device("/CPU:0"):
+        expected = np.asarray(model.predict_on_batch(x))
+        if expected.shape != (1, width) or not np.isfinite(expected).all():
+            raise ValueError("the fitted model did not produce a finite output of the declared width")
+        if quantiles and (np.diff(expected.reshape(len(horizons), len(quantiles)), axis=1) < 0).any():
+            raise ValueError("the fitted quantiles cross on the parity window; the pair would not be an interval")
+        j = columns.index(target)
+        expected_values = expected * float(scaler_sd[j]) + float(scaler_mean[j])
+
+        class NativeGraph(tf.Module):
+            def __init__(self):
+                super().__init__()
+                self.model = model
+
+            @tf.function(input_signature=[tf.TensorSpec((1, window, len(columns)), tf.float32, name="x")])
+            def forecast(self, x):
+                return {"forecast": self.model(x, training=False)}
+
+        graph = NativeGraph()
+        out.mkdir(parents=True)
+        tf.saved_model.save(graph, str(out / "saved_model"), signatures={"serving_default": graph.forecast})
+    files = {p.relative_to(out).as_posix(): file_digest(p)
+             for p in sorted((out / "saved_model").rglob("*")) if p.is_file()}
+
+    scaler = {"kind": "per_column_zscore", "mean": list(scaler_mean), "sd": list(scaler_sd),
+              "fitted_on": fit["scaler"]["fitted_on"]}
+    name = state_id or f"{fit['stage'].replace('_', '-')}-{Path(fit['data']['path']).stem.replace('_', '-')}"
+    step = int(fit["step_seconds"])
+    minutes = step == 60
+    manifest = {
+        "schema": SCHEMA_V2, "engine": "tensorflow_saved_model",
+        "exposure": FITTED_EXPOSURE,
+        "state_id": name, "task_id": f"predictor.{name}.W{window}_h{horizons[0]}",
+        "title": title or (f"DEVELOPMENT: {fit['stage']} household forecast, "
+                           f"{'quantile' if quantiles else 'point'} head at {horizons[0]} steps"),
+        "family": COMBINATION["family"],
+        "heads": ["quantile"] if quantiles else ["point"],
+        "columns": columns, "targets": [target], "horizons": horizons,
+        "window": window, "step_seconds": step,
+        "unit": "kW", "scale": "original",
+        "readout": "target_scaler_inverse", "input_scale": "train_standardized",
+        "horizon_meaning": (f"the realised value of {target} exactly {horizons[0]} rows ({horizons[0] * step} s) after "
+                            f"the last row of the window, which is what the fit was trained against"),
+        "aliases": {target: ["household power", "active power", "power consumption", "consumption",
+                             "potencia", "consumo"]},
+        "horizon_aliases": {str(horizons[0]): (["one hour", "an hour", "next hour", "una hora", "la proxima hora",
+                                                "próxima hora"] if minutes and horizons[0] == 60 else [])},
+        "scaler": scaler, "scaler_digest": digest(scaler), "files": files,
+        "provenance": {
+            "trained_on": (f"{Path(fit['data']['path']).name}, rows 0..{fit['data']['holdout_start_row']} (TRAIN only); "
+                           f"the holdout was sealed as {fit['population']['seal']} before the fit"),
+            "trained_by": (f"predictor tools/fit_pipeline_spec.py, stage {fit['stage']}, plugin "
+                           f"{fit['plugin_module']}, spec {Path(fit['spec']['path']).name}"),
+            "trained_at": fit["fitted_at"],
+            # this package scores nothing; the numbers measured on that seal live in the evaluation report named below
+            "quality": UNMEASURED,
+            "quality_note": ("this export neither trained nor scored anything. The fit was measured by "
+                             "M5PHET/evaluation under protocol "
+                             f"{fit['population']['protocol_digest']} against corpus seal "
+                             f"{fit['population']['seal']} ({fit['population']['sealed_rows']} rows); that report is "
+                             "the only place those numbers may be quoted from, with its conditions"),
+            "artifact_hashes": hashes,
+            "evaluation": {"protocol_digest": fit["population"]["protocol_digest"],
+                           "corpus_seal": fit["population"]["seal"],
+                           "sealed_rows": fit["population"]["sealed_rows"],
+                           "sealed_at": fit["population"]["sealed_at"],
+                           "report_sha256": hashes["report"]},
+            "representation_spec": fit["spec"],
+            "preprocessing": fit["preprocessing"],
+            "training": fit["training"],
+            "keras": keras.__version__, "tensorflow": tf.__version__, "numpy": np.__version__,
+            "parity_population": "the first TRAIN history window of the training file; no label was read",
+            "origin_row_in_train_file": window - 1,
+        },
+    }
+    if quantiles:
+        manifest["quantiles"] = quantiles
+    _write(out / "manifest.json", manifest)
+
+    provider = ForecastProvider(out)
+    data = {"columns": columns, "values": x[0].tolist(), "scale": manifest["input_scale"],
+            "scaler_digest": manifest["scaler_digest"]}
+    request = provider.chat_request(f"forecast {target} at {horizons[0]} steps", data,
+                                    {"provider": provider.name, "family": manifest["family"],
+                                     "output_kind": "point_forecast", "input": "json",
+                                     "as_of": datetime.now(timezone.utc).isoformat(),
+                                     "state": provider.known_states()[0],
+                                     "parameters": {"request_id": "fitted-bundle-example"}})
+    state = provider.load(request["fitted_state_ref"])
+    answer = provider.infer(request, state)
+    payload = answer["outputs"][target]["payload"]
+    actual = payload["quantile_values"] if quantiles else payload["values"]
+    np.testing.assert_allclose(np.asarray(actual).reshape(1, width), expected_values, rtol=1e-6, atol=1e-6)
+    if hashes != {"model": file_digest(model_path), "fit_manifest": file_digest(manifest_path),
+                  "report": file_digest(report_path)}:
+        raise ValueError("the fitted artifacts changed during export")
+    _write(out / "example_request.json", request)
+    example = provider.chat_examples()[0]
+    _write(out / "example_data.json", example["data"])
+    _write(out / "example_config.json", example["config"])
+    _write(out / "parity.json", {"native_values": expected_values.tolist(),
+                                 "provider_values": np.asarray(actual).reshape(1, width).tolist(),
+                                 "rtol": 1e-6, "atol": 1e-6,
+                                 "max_absolute_error": float(np.max(np.abs(
+                                     np.asarray(actual).reshape(1, width) - expected_values))),
                                  "state_digest": state["digest"], "model_sha256": state["model_sha256"],
                                  "input_sha256": digest(data), "population": "TRAIN history only",
                                  "no_training": True, "no_heldout_scoring": True, "device": "CPU"})

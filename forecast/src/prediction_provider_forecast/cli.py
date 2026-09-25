@@ -21,6 +21,13 @@ def main(argv=None):
     example.add_argument("--inference-config", type=Path, required=True,
                          help="a predictor inference config carrying load_model and x_train_file")
     example.add_argument("--out", type=Path, required=True)
+    fitted = commands.add_parser("export-fitted",
+                                 help="export one graph fitted by predictor's fit_pipeline_spec.py, never train")
+    fitted.add_argument("--fit-root", type=Path, required=True,
+                        help="the stage directory holding fitted/model.keras, fitted/fit_manifest.json and report.json")
+    fitted.add_argument("--out", type=Path, required=True)
+    fitted.add_argument("--state-id", default=None)
+    fitted.add_argument("--title", default=None)
     caps = commands.add_parser("capabilities")
     caps.add_argument("--bundle", type=Path)
     load = commands.add_parser("load")
@@ -39,6 +46,9 @@ def main(argv=None):
         if args.command == "export-dev":
             from .export import export_dev
             result = export_dev(args.predictor_root, args.run_root, args.out)
+        elif args.command == "export-fitted":
+            from .export import export_fitted_forecast
+            result = export_fitted_forecast(args.fit_root, args.out, state_id=args.state_id, title=args.title)
         elif args.command == "export-predictor-example":
             from .export import export_predictor_example
             result = export_predictor_example(args.predictor_root, args.inference_config, args.out)
