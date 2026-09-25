@@ -685,6 +685,17 @@ class ForecastProvider:
 
     # ------------------------------------------------------------------ the question envelope
 
+    def data_requirement(self):
+        """This engine cannot answer without the caller's window, and it says so before anything runs.
+
+        A person who typed a sentence and attached nothing used to wait for the engine to start and come back with
+        `PROVIDER_ERROR: data must contain exactly columns, values, scale and scaler_digest` (2026-09-24). The
+        framework asks this first and refuses the envelope by name, saying what to attach."""
+        return {"required": True,
+                "why": "a forecast is made from the caller's own window of observations; this provider holds none",
+                "shape": "a JSON object with exactly columns, values, scale and scaler_digest, standardized with the "
+                         "bundle's own scaler (the catalog example carries one that runs)"}
+
     def question_types(self):
         """The types a caller may ask this area, with the fields each takes.
 

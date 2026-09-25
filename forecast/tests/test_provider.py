@@ -192,3 +192,10 @@ def test_an_example_says_what_its_number_is_apart_from_the_payload_shape(ready):
     for e in direction:
         assert "probability" in e["prompt"] and "not a level" in e["reading"]
         assert e["config"]["output_kind"] == "point_forecast" and e["family"] == "binary_classification"
+
+
+def test_the_provider_declares_that_it_needs_the_callers_window(ready):
+    p, _ = ready
+    requirement = p.data_requirement()
+    assert requirement["required"] is True
+    assert "scaler_digest" in requirement["shape"] and requirement["why"]
